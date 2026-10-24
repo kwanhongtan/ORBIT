@@ -19,6 +19,7 @@ import {
   Stethoscope,
   Trash2,
   Undo2,
+  Send,
   WifiOff
 } from "lucide-react";
 import {
@@ -105,6 +106,8 @@ function App() {
   const [csvResult, setCsvResult] = useState<any>(null);
   const [csvFilename, setCsvFilename] = useState("Pasted CSV");
   const [pendingDelete, setPendingDelete] = useState<any>(null);
+  const [assistantMessages, setAssistantMessages] = useState<any[]>([]);
+  const [timelineMetric, setTimelineMetric] = useState("heart_rate");
   const changeCsv = (text: string, filename = "Pasted CSV") => { setCsvText(text); setCsvFilename(filename); setCsvPreview(null); setCsvResult(null); };
 
   const load = async () => {
@@ -184,7 +187,7 @@ function App() {
         </section>}
 
         {active === "timeline" && <section>
-          <HealthTimeline metrics={metrics} revision={data} />
+          <HealthTimeline metrics={metrics} revision={data} initialMetric={timelineMetric} />
           <Panel title="Health Timeline">
             <TimelineRail rows={measurements.slice(0, 18)} alerts={alerts.slice(0, 3)} />
           </Panel>
@@ -230,14 +233,7 @@ function App() {
           <Panel title="Follow-up Actions">{data.followUps.length ? data.followUps.map((f: any) => <FollowUp key={f.action_id} follow={f} action={action} />) : <p className="muted">Create a follow-up from an alert to show closed-loop review.</p>}</Panel>
         </section>}
 
-        {active === "ai" && <section className="grid two">
-          <Panel title="AI Health Assistant">
-            <p className="muted">Current mode uses deterministic local fallback. It sends no data externally and cannot override rule-based alerts.</p>
-            <p><span className="pill">AI enabled: {String(data.aiStatus.enabled)}</span><span className="pill">Gemini configured: {String(data.aiStatus.configured)}</span></p>
-            <button className="primary" onClick={() => action(() => api("/api/ai/explain", post()), "Structured explanation generated")}><Brain size={16} /> Generate Explanation</button>
-          </Panel>
-          <Panel title="Latest Explanation">{data.summary.latest_ai ? <div className="incident"><h3>{data.summary.latest_ai.summary}</h3><p>{data.summary.latest_ai.uncertainty}</p><p><b>Follow-up:</b> {data.summary.latest_ai.suggested_follow_up.join("; ")}</p><span className="pill">{data.summary.latest_ai.source}</span></div> : <p className="muted">No explanation generated yet.</p>}</Panel>
-        </section>}
+        <div hidden={active !== "ai"}><AssistantChat messages={assistantMessages} setMessages={setAssistantMessages} onNavigate={(view: string, metric?: string) => { if (view === "timeline" && metric) setTimelineMetric(metric); setActive(view); }} /></div>
 
         {active === "reports" && <section>
           <Panel title="Simulation Lab">
@@ -296,6 +292,56 @@ function App() {
       </main>
     </div>
   );
+}
+
+function AssistantChat({ messages, setMessages, onNavigate }: any) {
+  const [draft, setDraft] = useState("");
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState("");
+  const [failedQuestion, setFailedQuestion] = useState("");
+  const end = useRef<HTMLDivElement>(null);
+  const suggestions = ["Summarise mission health", "Explain current alerts", "Show heart rate trend", "Review data quality", "What needs follow-up?"];
+  useEffect(() => { if (messages.length) end.current?.scrollIntoView({ behavior: "smooth", block: "nearest" }); }, [messages.length]);
+  const ask = async (question: string, retry = false) => {
+    if (sending || !question.trim()) return;
+    const previous = [...messages].reverse().find((item: any) => item.reply)?.reply;
+    setSending(true);
+    setError("");
+    setFailedQuestion("");
+    setDraft("");
+    if (!retry) setMessages((items: any[]) => [...items, { id: crypto.randomUUID(), role: "user", text: question.trim() }]);
+    try {
+      const reply = await api("/api/ai/chat", post({ message: question.trim(), context_metric: previous?.context_metric || null }));
+      setMessages((items: any[]) => [...items, { id: crypto.randomUUID(), role: "assistant", reply }]);
+    } catch {
+      setError("Could not reach the local assistant. Check that the ORBIT server is running.");
+      setFailedQuestion(question);
+    } finally { setSending(false); }
+  };
+  return <section className="assistant-workspace">
+    <div className="assistant-header"><div><h2><Brain size={21} /> ORBIT Assistant</h2><span>Local, rule-based · No external model</span></div><button aria-label="Clear conversation" title="Clear conversation" disabled={sending || !messages.length} onClick={() => { setMessages([]); setError(""); setFailedQuestion(""); }}><Trash2 size={17} /></button></div>
+    <div className="assistant-thread" aria-live="polite" aria-busy={sending}>
+      {!messages.length && <div className="assistant-empty"><h3>Mission health review</h3><div className="assistant-suggestions">{suggestions.map((question) => <button key={question} disabled={sending} onClick={() => ask(question)}>{question}</button>)}</div></div>}
+      {messages.map((message: any) => <article className={`assistant-message ${message.role}`} key={message.id}>
+        <span className="message-author">{message.role === "user" ? "You" : "ORBIT · Local rules"}</span>
+        {message.role === "user" ? <p className="question-text">{message.text}</p> : <>
+          <p className="assistant-answer">{message.reply.answer}</p>
+          {message.reply.sections.map((section: any, index: number) => <div className="assistant-section" key={index}><h3>{section.title}</h3><ul>{section.items.map((item: string, i: number) => <li key={i}>{item}</li>)}</ul></div>)}
+          {!!message.reply.evidence.length && <details className="assistant-evidence"><summary>Supporting readings ({message.reply.evidence.length})</summary><ul>{message.reply.evidence.map((row: any) => <li key={row.measurement_id}><strong>{row.label}: {row.value} {displayUnit(row.unit)}</strong><span>{new Date(row.measured_at).toLocaleString()} · {row.source.replaceAll("_", " ")} · {row.quality_status}{row.freshness ? ` · ${row.freshness}` : ""}</span>{!!row.quality_flags.length && <span className="reading-warning">{row.quality_flags.join(", ")}</span>}<small>Record: {row.measurement_id}</small></li>)}</ul></details>}
+          <div className="assistant-actions">{message.reply.actions.map((item: any) => <button key={item.view} onClick={() => onNavigate(item.view, item.metric)}>{item.label}</button>)}</div>
+          <small className="assistant-generated">Snapshot: {new Date(message.reply.generated_at).toLocaleString()}</small>
+        </>}
+      </article>)}
+      {sending && <p className="assistant-pending" role="status"><RefreshCw size={15} className="spin" /> Reviewing stored records...</p>}
+      {error && <div role="alert" className="assistant-error"><p>{error}</p><button onClick={() => ask(failedQuestion, true)} disabled={sending}><RefreshCw size={15} /> Retry</button></div>}
+      <div ref={end} />
+    </div>
+    <form className="assistant-composer" onSubmit={(event) => { event.preventDefault(); ask(draft); }}>
+      <label htmlFor="assistant-question">Question</label>
+      <div><textarea id="assistant-question" maxLength={1000} rows={2} value={draft} disabled={sending} onChange={(event) => setDraft(event.target.value)} placeholder="Ask about a metric, alert, baseline, or follow-up" /><button className="primary" type="submit" aria-label="Send question" title="Send question" disabled={sending || !draft.trim()}><Send size={19} /></button></div>
+      <span>Local responses describe stored data; they are not diagnoses. Conversations stay in this app session.</span>
+    </form>
+  </section>;
 }
 
 function MetricCard({ label, value, hint, icon, tone }: any) {
@@ -390,8 +436,8 @@ function ImportResult({ result, imported }: any) {
   </div>;
 }
 
-function HealthTimeline({ metrics, revision }: any) {
-  const [metric, setMetric] = useState("heart_rate");
+function HealthTimeline({ metrics, revision, initialMetric = "heart_rate" }: any) {
+  const [metric, setMetric] = useState(initialMetric);
   const [rows, setRows] = useState<Measurement[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");

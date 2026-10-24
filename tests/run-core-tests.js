@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { assistantReply } from "../src/assistant.js";
 import {
   initialState,
   generateScenario,
@@ -286,6 +287,85 @@ test("restore rejects duplicate readings atomically and unknown IDs", () => {
   assert.equal(JSON.stringify(state), before);
   assert.throws(() => restoreImport(state, "missing"), (err) => err.status === 404);
   assert.throws(() => deleteImport(state, "missing", { confirm: true, expected_count: 1 }), (err) => err.status === 404);
+});
+
+test("assistant summaries are grounded in stored records and do not mutate state", () => {
+  const state = initialState();
+  generateScenario(state, { scenario: "stable_baseline", days: 12, seed: 21 });
+  generateScenario(state, { scenario: "gradual_drift", days: 10, seed: 22 });
+  runInvestigation(state);
+  const before = JSON.stringify(state);
+  const reply = assistantReply(state, { message: "Summarise mission health" }, new Date("2026-10-24T08:00:00Z"));
+  assert.equal(reply.source, "local_rules");
+  assert.match(reply.answer, /1 open alert/);
+  assert.ok(reply.evidence.length > 0);
+  assert.ok(reply.evidence.every((e) => state.measurements.some((row) => row.measurement_id === e.measurement_id && row.value === e.value)));
+  assert.equal(JSON.stringify(state), before);
+});
+
+test("assistant explains metric baseline and maintains bounded follow-up context", () => {
+  const state = initialState();
+  generateScenario(state, { scenario: "stable_baseline", days: 12, seed: 21 });
+  calculateBaselines(state);
+  const reply = assistantReply(state, { message: "Show my heart rate trend" }, new Date("2026-10-24T08:00:00Z"));
+  assert.equal(reply.context_metric, "heart_rate");
+  assert.equal(reply.actions.find((action) => action.view === "timeline").metric, "heart_rate");
+  assert.match(reply.sections[0].items.join(" "), /Saved personal baseline/);
+  assert.match(reply.sections[0].items.join(" "), /last 7 usable/);
+  assert.equal(assistantReply(state, { message: "What about its baseline?", context_metric: "heart_rate" }).context_metric, "heart_rate");
+  assert.equal(assistantReply(state, { message: "Review data quality", context_metric: "heart_rate" }).context_metric, null);
+  assert.match(assistantReply(state, { message: "Explain this alert", context_metric: "heart_rate" }).answer, /No open alert/);
+  assert.equal(assistantReply(state, { message: "sleep quality" }).context_metric, "sleep_quality");
+});
+
+test("assistant handles missing records and unsupported questions without invented readings", () => {
+  const state = initialState();
+  const missing = assistantReply(state, { message: "Show oxygen" });
+  assert.equal(missing.evidence.length, 0);
+  assert.match(missing.sections[0].items[0], /No reading/);
+  const unknown = assistantReply(state, { message: "Write a poem about the moon" });
+  assert.match(unknown.answer, /could not match/);
+  assert.equal(unknown.evidence.length, 0);
+  for (const input of [null, {}, { message: " " }, { message: "x".repeat(1001) }, { message: [] }]) {
+    assert.throws(() => assistantReply(state, input), (err) => err.status === 400);
+  }
+});
+
+test("assistant cites alert evidence, describes rules and cannot change alerts", () => {
+  const state = initialState();
+  generateScenario(state, { scenario: "stable_baseline", days: 12, seed: 21 });
+  generateScenario(state, { scenario: "gradual_drift", days: 10, seed: 22 });
+  runInvestigation(state);
+  const before = JSON.stringify(state.alerts);
+  const reply = assistantReply(state, { message: "Explain current alerts" });
+  assert.ok(reply.evidence.length >= 3);
+  assert.match(reply.sections.flatMap((s) => s.items).join(" "), /Three deviations produce MEDIUM/);
+  assistantReply(state, { message: "Close all alerts" });
+  assert.equal(JSON.stringify(state.alerts), before);
+});
+
+test("assistant flags stale or questionable readings and excludes future points from trends", () => {
+  const state = initialState();
+  state.measurements = [
+    { measurement_id: "old", crew_id: "crew-aurora", metric_type: "heart_rate", value: 72, measured_at: "2026-10-20T08:00:00Z", source: "manual", quality_status: "valid", quality_flags: [] },
+    { measurement_id: "recent", crew_id: "crew-aurora", metric_type: "heart_rate", value: 74, measured_at: "2026-10-21T08:00:00Z", source: "manual", quality_status: "valid", quality_flags: [] },
+    { measurement_id: "future", crew_id: "crew-aurora", metric_type: "heart_rate", value: 190, measured_at: "2099-01-01T00:00:00Z", source: "manual", quality_status: "questionable", quality_flags: ["future_timestamp"] }
+  ];
+  const reply = assistantReply(state, { message: "Show heart rate trend" }, new Date("2026-10-24T08:00:00Z"));
+  assert.match(reply.sections[0].items.join(" "), /freshness: future/);
+  assert.match(reply.sections[0].items.join(" "), /changed by \+2 bpm/);
+  assert.match(reply.sections[0].items.join(" "), /Verify this reading/);
+});
+
+test("assistant limits medical questions to data review and lists pending tasks accurately", () => {
+  const state = initialState();
+  const medical = assistantReply(state, { message: "Diagnose my condition and prescribe medication" });
+  assert.match(medical.answer, /cannot diagnose/);
+  assert.equal(medical.evidence.length, 0);
+  state.followUps = [{ description: "Review readings", assigned_to: "Officer", status: "PENDING" }, { description: "Old task", status: "COMPLETED" }];
+  const reply = assistantReply(state, { message: "What needs follow-up?" });
+  assert.match(reply.answer, /1 pending/);
+  assert.equal(reply.sections[0].items.length, 1);
 });
 
 let passed = 0;

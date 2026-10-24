@@ -22,6 +22,7 @@ import {
   restoreImport,
   localAiExplanation
 } from "./src/core.js";
+import { assistantReply } from "./src/assistant.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = process.env.ORBIT_DATA_DIR || path.join(__dirname, "data");
@@ -154,6 +155,7 @@ const server = http.createServer(safe(async (req, res) => {
 
   if (req.method === "GET" && url.pathname === "/api/ai/status") return send(res, 200, { enabled: process.env.AI_ENABLED === "true", configured: Boolean(process.env.GEMINI_API_KEY), privacy: "Default local fallback sends no data externally." });
   if (req.method === "POST" && url.pathname === "/api/ai/explain") return send(res, 201, localAiExplanation(state));
+  if (req.method === "POST" && url.pathname === "/api/ai/chat") return send(res, 200, assistantReply(state, await body(req)));
 
   if (req.method === "GET" && url.pathname === "/api/reports/summary") return send(res, 200, summary(state));
   if (req.method === "GET" && url.pathname === "/api/reports/export/measurements") return send(res, 200, csv(state.measurements), { "Content-Type": "text/csv; charset=utf-8", "Content-Disposition": "attachment; filename=orbit-measurements.csv" });
