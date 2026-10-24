@@ -12,7 +12,10 @@ import {
   latestReadings,
   parseCsv,
   importMeasurements,
-  csv
+  csv,
+  listImports,
+  deleteImport,
+  restoreImport
 } from "../src/core.js";
 
 const tests = [];
@@ -216,6 +219,73 @@ test("CSV preview does not mutate state and import skips duplicates", () => {
   assert.equal(state.measurements.length, 1);
   assert.equal(state.measurements[0].source, "csv_import");
   assert.equal(importMeasurements(state, text, { currentTime, commit: true }).accepted, 0);
+});
+
+test("CSV imports have separate batch identity and recoverable deletion", () => {
+  const state = initialState();
+  const makeCsv = (value, date) => csv([{ crew_id: "crew-aurora", metric_type: "heart_rate", value, measured_at: date }]);
+  const first = importMeasurements(state, makeCsv(72, "2026-10-20T08:00:00Z"), { commit: true, filename: "first.csv" });
+  const second = importMeasurements(state, makeCsv(74, "2026-10-21T08:00:00Z"), { commit: true, filename: "second.csv" });
+  state.measurements.push(createMeasurement({ crew_id: "crew-aurora", metric_type: "stress", value: 3, measured_at: "2026-10-20T08:00:00Z", source: "manual" }, state));
+  generateScenario(state, { days: 2 });
+  const before = state.measurements.length;
+  assert.notEqual(first.batch_id, second.batch_id);
+  assert.equal(listImports(state).active.length, 2);
+  const snapshot = JSON.stringify(state);
+  assert.throws(() => deleteImport(state, first.batch_id, {}), (err) => err.status === 400);
+  assert.throws(() => deleteImport(state, first.batch_id, { confirm: true, expected_count: 2 }), (err) => err.status === 409);
+  assert.equal(JSON.stringify(state), snapshot);
+  assert.equal(deleteImport(state, first.batch_id, { confirm: true, expected_count: 1 }).removed, 1);
+  assert.equal(state.measurements.length, before - 1);
+  assert.equal(state.measurements.some((row) => row.import_batch_id === second.batch_id), true);
+  assert.equal(state.measurements.some((row) => row.source === "manual"), true);
+  const persisted = JSON.parse(JSON.stringify(state));
+  const deleted = listImports(persisted).deleted[0];
+  assert.equal(deleted.filename, "first.csv");
+  assert.equal(restoreImport(persisted, deleted.batch_id).restored, 1);
+  assert.equal(persisted.measurements.length, before);
+  assert.equal(listImports(persisted).deleted.length, 0);
+  assert.equal(listImports(persisted).active.length, 2);
+});
+
+test("deleting imports archives only linked workflow and invalidates affected baselines", () => {
+  const state = initialState();
+  const result = importMeasurements(state, csv([{ crew_id: "crew-aurora", metric_type: "heart_rate", value: 72, measured_at: "2026-10-20T08:00:00Z" }]), { commit: true });
+  const id = state.measurements[0].measurement_id;
+  state.investigations = [{ investigation_id: "linked", evidence: [{ measurement_id: id }] }, { investigation_id: "unrelated", evidence: [] }];
+  state.alerts = [{ alert_id: "linked", investigation_id: "linked" }, { alert_id: "unrelated", related_measurement_ids: ["other"] }];
+  state.followUps = [{ action_id: "linked", alert_id: "linked" }, { action_id: "unrelated", alert_id: "unrelated" }];
+  state.baselines = [{ crew_id: "crew-aurora" }, { crew_id: "other" }];
+  deleteImport(state, result.batch_id, { confirm: true, expected_count: 1 });
+  assert.deepEqual(state.investigations.map((row) => row.investigation_id), ["unrelated"]);
+  assert.deepEqual(state.alerts.map((row) => row.alert_id), ["unrelated"]);
+  assert.deepEqual(state.followUps.map((row) => row.action_id), ["unrelated"]);
+  assert.deepEqual(state.baselines, [{ crew_id: "other" }]);
+  assert.equal(state.deletedImports[0].dependent_records.alerts.length, 1);
+});
+
+test("legacy CSV records can be deleted without guessing custom or manual sources", () => {
+  const state = initialState();
+  for (const [index, source] of ["csv_import", "imported_sample", "manual", "wearable_export"].entries()) {
+    state.measurements.push(createMeasurement({ crew_id: "crew-aurora", metric_type: "heart_rate", value: 70 + index, measured_at: "2026-10-20T08:00:00Z", source }, state));
+  }
+  assert.equal(listImports(state).active[0].count, 2);
+  deleteImport(state, "legacy-csv", { confirm: true, expected_count: 2 });
+  assert.deepEqual(state.measurements.map((row) => row.source), ["manual", "wearable_export"]);
+});
+
+test("restore rejects duplicate readings atomically and unknown IDs", () => {
+  const state = initialState();
+  const text = csv([{ crew_id: "crew-aurora", metric_type: "heart_rate", value: 72, measured_at: "2026-10-20T08:00:00Z" }]);
+  const result = importMeasurements(state, text, { commit: true });
+  deleteImport(state, result.batch_id, { confirm: true, expected_count: 1 });
+  const deleted = listImports(state).deleted[0];
+  importMeasurements(state, text, { commit: true });
+  const before = JSON.stringify(state);
+  assert.throws(() => restoreImport(state, deleted.batch_id), (err) => err.status === 409);
+  assert.equal(JSON.stringify(state), before);
+  assert.throws(() => restoreImport(state, "missing"), (err) => err.status === 404);
+  assert.throws(() => deleteImport(state, "missing", { confirm: true, expected_count: 1 }), (err) => err.status === 404);
 });
 
 let passed = 0;

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Activity,
@@ -17,6 +17,8 @@ import {
   RefreshCw,
   ShieldCheck,
   Stethoscope,
+  Trash2,
+  Undo2,
   WifiOff
 } from "lucide-react";
 import {
@@ -101,10 +103,12 @@ function App() {
   const [csvText, setCsvText] = useState("");
   const [csvPreview, setCsvPreview] = useState<any>(null);
   const [csvResult, setCsvResult] = useState<any>(null);
-  const changeCsv = (text: string) => { setCsvText(text); setCsvPreview(null); setCsvResult(null); };
+  const [csvFilename, setCsvFilename] = useState("Pasted CSV");
+  const [pendingDelete, setPendingDelete] = useState<any>(null);
+  const changeCsv = (text: string, filename = "Pasted CSV") => { setCsvText(text); setCsvFilename(filename); setCsvPreview(null); setCsvResult(null); };
 
   const load = async () => {
-    const [summary, measurements, baselines, investigations, alerts, followUps, scenarios, aiStatus, config] = await Promise.all([
+    const [summary, measurements, baselines, investigations, alerts, followUps, scenarios, aiStatus, config, imports] = await Promise.all([
       api("/api/reports/summary"),
       api("/api/measurements?limit=300"),
       api("/api/baselines"),
@@ -113,9 +117,10 @@ function App() {
       api("/api/follow-ups"),
       api("/api/simulator/scenarios"),
       api("/api/ai/status"),
-      api("/api/config")
+      api("/api/config"),
+      api("/api/imports")
     ]);
-    setData({ summary, measurements, baselines, investigations, alerts, followUps, scenarios, aiStatus, config });
+    setData({ summary, measurements, baselines, investigations, alerts, followUps, scenarios, aiStatus, config, imports });
   };
 
   const action = async (fn: () => Promise<any>, label: string) => {
@@ -157,6 +162,11 @@ function App() {
           <button onClick={() => action(load, "Refreshed")} disabled={busy}><RefreshCw size={16} /> Refresh</button>
         </header>
         {message && <div className="toast">{message}</div>}
+        {pendingDelete && <DeleteImportDialog batch={pendingDelete} onCancel={() => setPendingDelete(null)} onConfirm={() => {
+          const batch = pendingDelete;
+          setPendingDelete(null);
+          action(async () => { await api(`/api/imports/${batch.batch_id}/delete`, post({ confirm: true, expected_count: batch.count })); setCsvResult(null); setCsvPreview(null); }, "Import deleted; readings can be restored");
+        }} />}
 
         {active === "overview" && <section>
           <MissionHero summary={data.summary} activeAlerts={activeAlerts} latest={latestByMetric} />
@@ -258,17 +268,30 @@ function App() {
               changeCsv("");
               try {
                 if (file.size > 1024 * 1024) throw new Error("CSV file exceeds 1 MB limit");
-                changeCsv(await file.text());
+                changeCsv(await file.text(), file.name);
               } catch (err: any) { setMessage(err.message || "Could not read file"); }
             }} /></label>
             <textarea aria-label="CSV records" value={csvText} onChange={(e) => changeCsv(e.target.value)} placeholder="crew_id,metric_type,value,unit,measured_at,source,notes" />
             <div className="toolbar">
               <button disabled={busy || !csvText.trim()} onClick={() => action(async () => { setCsvResult(null); setCsvPreview(null); setCsvPreview(await api("/api/measurements/import/preview", { method: "POST", headers: { "Content-Type": "text/csv" }, body: csvText })); }, "CSV preview ready")}><FileText size={16} /> Validate CSV</button>
-              <button className="primary" disabled={busy || !csvPreview?.accepted} onClick={() => action(async () => { const result = await api("/api/measurements/import", { method: "POST", headers: { "Content-Type": "text/csv" }, body: csvText }); setCsvResult(result); setCsvPreview(null); }, "CSV import complete")}><Download size={16} /> Import Valid Records</button>
+              <button className="primary" disabled={busy || !csvPreview?.accepted} onClick={() => action(async () => { const result = await api("/api/measurements/import", { method: "POST", headers: { "Content-Type": "text/csv", "X-Import-Filename": encodeURIComponent(csvFilename) }, body: csvText }); setCsvResult(result); setCsvPreview(null); }, "CSV import complete")}><Download size={16} /> Import Valid Records</button>
             </div>
             {(csvPreview || csvResult) && <ImportResult result={csvResult || csvPreview} imported={!!csvResult} />}
           </Panel>
           </div>
+          <Panel title="Import History">
+            {data.imports.active.length ? <div className="import-history">{data.imports.active.map((batch: any) => <div className="import-history-row" key={batch.batch_id}>
+              <div><strong>{batch.filename}</strong><span>{batch.count} readings · {batch.imported_at ? new Date(batch.imported_at).toLocaleString() : "Import date unavailable"}</span></div>
+              <button className="danger-button" disabled={busy} onClick={() => setPendingDelete(batch)}><Trash2 size={16} /> Delete Import</button>
+            </div>)}</div> : <p className="muted">No active CSV imports.</p>}
+            <details className="deleted-imports"><summary>Deleted Imports ({data.imports.deleted.length})</summary>
+              <p className="muted">Deleted readings remain in the local database for recovery. Restoring brings back readings; recalculate baselines and rerun the investigator afterward.</p>
+              {data.imports.deleted.map((batch: any) => <div className="import-history-row" key={batch.batch_id}>
+                <div><strong>{batch.filename}</strong><span>{batch.count} readings · Deleted {new Date(batch.deleted_at).toLocaleString()}</span></div>
+                <button disabled={busy} onClick={() => action(() => api(`/api/imports/${batch.batch_id}/restore`, post()), "Readings restored; rerun baseline calculation and investigation")}><Undo2 size={16} /> Restore Readings</button>
+              </div>)}
+            </details>
+          </Panel>
         </section>}
       </main>
     </div>
@@ -345,6 +368,18 @@ function LatestReadings({ latest, metrics }: any) {
 
 function Panel({ title, children }: any) {
   return <div className="panel"><h2>{title}</h2>{children}</div>;
+}
+
+function DeleteImportDialog({ batch, onCancel, onConfirm }: any) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => { dialog.current?.showModal(); }, []);
+  return <dialog ref={dialog} className="delete-dialog" aria-labelledby="delete-import-title" onCancel={(event) => { event.preventDefault(); onCancel(); }}>
+    <h2 id="delete-import-title">Delete CSV import?</h2>
+    <p><strong>{batch.filename}</strong> · {batch.count} readings</p>
+    <p>These readings will leave active graphs and records. Related findings, alerts and follow-ups will be archived. Affected baselines and generated explanations will be cleared.</p>
+    <p>You can restore the readings from Deleted Imports. Other imports and manual readings will remain.</p>
+    <div className="toolbar"><button autoFocus onClick={onCancel}>Cancel</button><button className="danger-button" onClick={onConfirm}><Trash2 size={16} /> Delete {batch.count} Readings</button></div>
+  </dialog>;
 }
 
 function ImportResult({ result, imported }: any) {

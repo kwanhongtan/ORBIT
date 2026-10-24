@@ -37,3 +37,11 @@ The isolated unusual measurement scenario places one heart-rate spike on a seede
 Select a CSV file (up to 1 MB) or paste its contents, then choose **Validate CSV**. Review the ready count, rejected records, duplicate count, and first 20 accepted records. Choose **Import Valid Records** to save only accepted records. Validation does not import data; imported records are revalidated before saving.
 
 Required columns: `crew_id`, `metric_type`, `value`, `measured_at`. Optional columns include `unit`, `source`, and `notes`. Use `crew-aurora` for the current crew and ISO timestamps with a timezone, such as `2026-10-24T08:00:00Z`. Vendor exports with other headers need mapping to this schema. See `data/import_template.csv` for an example.
+
+## Delete CSV Imports
+
+Under **Data & Simulation Lab > Import History**, choose **Delete Import** and confirm the filename and reading count. Readings are removed from active graphs and records and kept in **Deleted Imports** for recovery in the same local JSON database. This is recoverable deletion, not permanent erasure. Manual readings, simulated readings, and other imports remain active.
+
+Findings and alerts that reference removed readings, and follow-ups linked to those alerts, are archived with the import. Affected crew baselines and generated explanations are cleared to avoid stale results. **Restore Readings** restores the measurements only; recalculate baselines and rerun investigations afterward. Restore is refused if equivalent readings already exist.
+
+New imports are tracked separately by upload with their filename (or `Pasted CSV`). Older records explicitly marked `csv_import` or `imported_sample` are grouped under **Earlier CSV imports (grouped)** because their original upload boundaries are unavailable. Older custom source labels cannot be reliably identified as CSV imports and are not automatically included.

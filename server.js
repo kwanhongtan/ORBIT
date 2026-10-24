@@ -17,6 +17,9 @@ import {
   summary,
   csv,
   importMeasurements,
+  listImports,
+  deleteImport,
+  restoreImport,
   localAiExplanation
 } from "./src/core.js";
 
@@ -47,7 +50,7 @@ function send(res, status, body, headers = {}) {
     "Content-Type": typeof body === "string" ? "text/plain; charset=utf-8" : "application/json; charset=utf-8",
     "Access-Control-Allow-Origin": "http://localhost:4173",
     "Access-Control-Allow-Methods": "GET,POST,PATCH,OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Headers": "Content-Type,X-Import-Filename",
     ...headers
   });
   res.end(payload);
@@ -116,9 +119,15 @@ const server = http.createServer(safe(async (req, res) => {
   }
   if (req.method === "GET" && url.pathname.startsWith("/api/measurements/")) return send(res, 200, state.measurements.find((m) => m.measurement_id === url.pathname.split("/").at(-1)) || {});
   if (req.method === "POST" && url.pathname === "/api/measurements/import") {
-    return send(res, 200, importMeasurements(state, String(await body(req)), { commit: true }));
+    const filename = req.headers["x-import-filename"] ? decodeURIComponent(String(req.headers["x-import-filename"])) : "Pasted CSV";
+    return send(res, 200, importMeasurements(state, String(await body(req)), { commit: true, filename }));
   }
   if (req.method === "POST" && url.pathname === "/api/measurements/import/preview") return send(res, 200, importMeasurements(state, String(await body(req))));
+  if (req.method === "GET" && url.pathname === "/api/imports") return send(res, 200, listImports(state));
+  const importAction = url.pathname.match(/^\/api\/imports\/([^/]+)\/(delete|restore)$/);
+  if (req.method === "POST" && importAction) {
+    return send(res, 200, importAction[2] === "delete" ? deleteImport(state, importAction[1], await body(req)) : restoreImport(state, importAction[1]));
+  }
 
   if (req.method === "GET" && url.pathname === "/api/baselines") return send(res, 200, state.baselines.length ? state.baselines : calculateBaselines(state));
   if (req.method === "POST" && url.pathname === "/api/baselines/recalculate") return send(res, 200, calculateBaselines(state));
