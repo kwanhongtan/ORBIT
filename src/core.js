@@ -74,15 +74,17 @@ export function validateMeasurement(input, existing = [], currentTime = new Date
   const errors = [];
   const metric = METRICS[input.metric_type];
   const measured = new Date(input.measured_at);
-  const value = Number(input.value);
+  const hasNumericValue = typeof input.value === "number" || (typeof input.value === "string" && input.value.trim() !== "");
+  const value = hasNumericValue ? Number(input.value) : NaN;
+  const validTimestamp = typeof input.measured_at === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(input.measured_at) && Number.isFinite(measured.getTime());
   if (!input.crew_id) errors.push("crew_id is required");
   if (!metric) errors.push("unsupported metric_type");
   if (!Number.isFinite(value)) errors.push("value must be numeric");
-  if (!input.measured_at || Number.isNaN(measured.getTime())) errors.push("measured_at must be an ISO timestamp");
+  if (!validTimestamp) errors.push("measured_at must be an ISO timestamp with timezone");
   if (metric && input.unit && input.unit !== metric.unit) errors.push(`unit must be ${metric.unit}`);
   if (metric && Number.isFinite(value) && (value < metric.min || value > metric.max)) errors.push(`value is outside supported technical range ${metric.min}-${metric.max}`);
 
-  const duplicate = existing.find((m) =>
+  const duplicate = validTimestamp && existing.find((m) =>
     m.crew_id === input.crew_id &&
     m.metric_type === input.metric_type &&
     m.measured_at === measured.toISOString() &&
@@ -189,7 +191,7 @@ function quantile(sorted, q) {
 
 export function runInvestigation(state, crewId = "crew-aurora", asOf = null) {
   const latestMeasurementTime = state.measurements
-    .filter((m) => m.crew_id === crewId)
+    .filter((m) => m.crew_id === crewId && m.quality_status !== "invalid" && !m.quality_flags?.includes("future_timestamp"))
     .map((m) => new Date(m.measured_at))
     .filter((d) => !Number.isNaN(d.getTime()))
     .sort((a, b) => b - a)[0];
@@ -201,12 +203,16 @@ export function runInvestigation(state, crewId = "crew-aurora", asOf = null) {
     new Date(m.measured_at) >= windowStart &&
     new Date(m.measured_at) <= asOf
   );
-  const usable = recent.filter((m) => m.quality_status === "valid");
-  const qualityIssues = recent.filter((m) => m.quality_status !== "valid");
+  const usable = recent.filter((m) => m.quality_status === "valid" && !m.quality_flags?.includes("future_timestamp"));
+  const qualityIssues = recent.filter((m) => !usable.includes(m));
+  const missingMetrics = [];
+  const insufficientBaselines = [];
   const evidence = [];
   for (const metric of ["heart_rate", "sleep_duration", "fatigue", "stress", "hydration", "blood_oxygen"]) {
     const latest = usable.filter((m) => m.metric_type === metric).sort((a, b) => new Date(b.measured_at) - new Date(a.measured_at))[0];
     const baseline = baselines.find((b) => b.metric_type === metric);
+    if (!latest) missingMetrics.push(metric);
+    if (!baseline?.sufficient) insufficientBaselines.push(metric);
     if (!latest || !baseline?.sufficient) continue;
     const direction = metric === "sleep_duration" || metric === "hydration" || metric === "blood_oxygen" ? "low" : "high";
     const deviates = direction === "high" ? latest.value > baseline.upper_bound : latest.value < baseline.lower_bound;
@@ -247,6 +253,8 @@ export function runInvestigation(state, crewId = "crew-aurora", asOf = null) {
     explanation,
     evidence,
     quality_limitations: qualityIssues.map((m) => ({ measurement_id: m.measurement_id, metric_type: m.metric_type, flags: m.quality_flags })),
+    missing_metrics: missingMetrics,
+    insufficient_baselines: insufficientBaselines,
     observation_window_hours: 36,
     created_at: nowIso()
   };

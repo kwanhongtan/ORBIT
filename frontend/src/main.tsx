@@ -58,6 +58,8 @@ type Investigation = {
   explanation: string;
   evidence: any[];
   quality_limitations: any[];
+  missing_metrics?: string[];
+  insufficient_baselines?: string[];
 };
 
 const nav = [
@@ -203,7 +205,7 @@ function App() {
             <textarea value={checkin.notes} onChange={(e) => setCheckin({ ...checkin, notes: e.target.value })} placeholder="Context, symptoms, activity notes, or verification comments" />
             <button className="primary" onClick={() => action(async () => {
               for (const name of ["mood", "fatigue", "stress", "sleep_quality", "symptom_severity"]) {
-                await api("/api/measurements", post({ crew_id: "crew-aurora", metric_type: name, value: Number((checkin as any)[name]), unit: metrics[name].unit, measured_at: new Date().toISOString(), source: "manual", notes: checkin.notes }));
+                await api("/api/measurements", post({ crew_id: "crew-aurora", metric_type: name, value: (checkin as any)[name], unit: metrics[name].unit, measured_at: new Date().toISOString(), source: "manual", notes: checkin.notes }));
               }
             }, "Daily check-in saved")}><ListChecks size={16} /> Submit Check-in</button>
           </Panel>
@@ -212,7 +214,7 @@ function App() {
             <div className="toolbar">
               <select value={metric} onChange={(e) => setMetric(e.target.value)}>{Object.keys(metrics).map((m) => <option key={m} value={m}>{metrics[m].label}</option>)}</select>
               <input placeholder="Value" value={manualValue} onChange={(e) => setManualValue(e.target.value)} />
-              <button onClick={() => action(() => api("/api/measurements", post({ crew_id: "crew-aurora", metric_type: metric, value: Number(manualValue), unit: metrics[metric].unit, measured_at: new Date().toISOString(), source: "manual" })), "Manual measurement saved")}>Add Measurement</button>
+              <button onClick={() => action(() => api("/api/measurements", post({ crew_id: "crew-aurora", metric_type: metric, value: manualValue, unit: metrics[metric].unit, measured_at: new Date().toISOString(), source: "manual" })), "Manual measurement saved")}>Add Measurement</button>
             </div>
           </Panel>
         </section>}
@@ -356,7 +358,7 @@ function TimelineRail({ rows, alerts }: { rows: Measurement[]; alerts: Alert[] }
 
 function Finding({ finding }: { finding?: Investigation }) {
   if (!finding) return <p className="muted">No investigation has been run yet.</p>;
-  return <div className="incident"><h3 className={finding.severity}>{finding.title}</h3><p>{finding.explanation}</p><div>{finding.evidence?.map((e: any) => <span className="pill" key={e.measurement_id}>{e.metric_type}: {e.value} vs {e.bound}</span>)}</div>{!!finding.quality_limitations?.length && <p className="muted">{finding.quality_limitations.length} quality-limited record(s) excluded.</p>}</div>;
+  return <div className="incident"><h3 className={finding.severity}>{finding.title}</h3><p>{finding.explanation}</p><div>{finding.evidence?.map((e: any) => <span className="pill" key={e.measurement_id}>{e.metric_type}: {e.value} vs {e.bound}</span>)}</div>{!!finding.quality_limitations?.length && <p className="muted">{finding.quality_limitations.length} quality-limited record(s) excluded.</p>}{!!finding.missing_metrics?.length && <p className="reading-warning">No usable recent reading: {finding.missing_metrics.map((m) => m.replaceAll("_", " ")).join(", ")}.</p>}{!!finding.insufficient_baselines?.length && <p className="reading-warning">Baseline not established: {finding.insufficient_baselines.map((m) => m.replaceAll("_", " ")).join(", ")}.</p>}</div>;
 }
 
 function AlertCard({ alert, action }: { alert: Alert; action: any }) {

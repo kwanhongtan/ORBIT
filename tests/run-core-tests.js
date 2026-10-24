@@ -133,6 +133,37 @@ test("reading freshness is recalculated with metric-specific intervals", () => {
   assert.equal(latestReadings(initialState()).heart_rate, undefined);
 });
 
+test("measurement validation rejects blank values and malformed timestamps cleanly", () => {
+  const state = initialState();
+  const input = { crew_id: "crew-aurora", metric_type: "symptom_severity", value: 0, measured_at: "2026-10-20T08:00:00Z" };
+  state.measurements.push(createMeasurement(input, state, new Date(input.measured_at)));
+  for (const value of ["", "   ", null, undefined, false, [], {}]) {
+    assert.throws(() => createMeasurement({ ...input, value }, state), (err) => err.status === 400 && /numeric/.test(err.message));
+  }
+  for (const measured_at of ["bad-date", "2026-10-20", "2026-10-20T08:00:00", ""]) {
+    assert.throws(() => createMeasurement({ ...input, measured_at }, state), (err) => err.status === 400 && /timestamp/.test(err.message));
+  }
+  assert.equal(createMeasurement({ ...input, value: "0" }, state).value, 0);
+});
+
+test("flagged future records do not shift the investigation window", () => {
+  const state = initialState();
+  generateScenario(state, { scenario: "stable_baseline", days: 12, seed: 21 });
+  generateScenario(state, { scenario: "gradual_drift", days: 10, seed: 22 });
+  const before = runInvestigation(state);
+  state.measurements.push(createMeasurement({ crew_id: "crew-aurora", metric_type: "heart_rate", value: 190, measured_at: "2099-01-01T00:00:00Z" }, state, new Date("2026-10-23T00:00:00Z")));
+  const after = runInvestigation(state);
+  assert.equal(after.severity, before.severity);
+  assert.deepEqual(after.evidence, before.evidence);
+});
+
+test("empty investigations identify missing data and insufficient baselines", () => {
+  const result = runInvestigation(initialState());
+  assert.equal(result.missing_metrics.length, 6);
+  assert.equal(result.insufficient_baselines.length, 6);
+  assert.equal(result.evidence.length, 0);
+});
+
 let passed = 0;
 for (const item of tests) {
   try {
