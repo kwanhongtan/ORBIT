@@ -1,0 +1,2 @@
+crew_id,metric_type,value,unit,measured_at,source,notes
+crew-aurora,heart_rate,72,bpm,2026-10-09T02:00:00.000Z,manual,Optional note

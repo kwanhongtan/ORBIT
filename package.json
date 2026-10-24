@@ -1,0 +1,23 @@
+{
+  "name": "orbit-health-monitor",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "ORBIT - AI-powered astronaut health monitoring and early-warning demonstration system.",
+  "scripts": {
+    "start": "node server.js",
+    "build": "vite build --config frontend/vite.config.ts",
+    "dev:frontend": "vite --config frontend/vite.config.ts --host 127.0.0.1",
+    "test": "node tests/run-core-tests.js"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^6.1.2",
+    "lucide-react": "^1.54.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "recharts": "^3.10.1",
+    "three": "^0.186.1",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4"
+  }
+}

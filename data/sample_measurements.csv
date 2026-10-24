@@ -1,0 +1,5 @@
+crew_id,metric_type,value,unit,measured_at,source,notes
+crew-aurora,heart_rate,72,bpm,2026-10-09T02:00:00.000Z,imported_sample,Stable imported sample
+crew-aurora,blood_oxygen,98,percent,2026-10-09T02:00:00.000Z,imported_sample,Stable imported sample
+crew-aurora,sleep_duration,7.4,hours,2026-10-09T02:00:00.000Z,imported_sample,Stable imported sample
+crew-aurora,fatigue,3,score_1_10,2026-10-09T02:00:00.000Z,imported_sample,Stable imported sample
