@@ -10,6 +10,8 @@ Latest readings include timestamp, source, input quality, and freshness. These c
 
 Review trends, measurement records, source labels, and quality status.
 
+Select any health metric in **Health graphs** to review its full recorded history. Filter by local start/end dates, source, or quality and switch between line and bar graphs. Hover a plotted reading for its value, time, source, and quality flags. The records table follows the same filters and uses 50-record pages. Use the reset icon to clear filters. Metrics without matching data show an empty state.
+
 ## Drift Investigation
 
 Recalculate baselines after generating stable data. Run the investigator after each scenario. Findings show the supporting measurements, baseline comparisons, severity, and quality limitations.

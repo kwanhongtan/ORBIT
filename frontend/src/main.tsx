@@ -6,6 +6,8 @@ import {
   BarChart3,
   Brain,
   ClipboardCheck,
+  ChevronLeft,
+  ChevronRight,
   Database,
   Download,
   FileText,
@@ -18,8 +20,8 @@ import {
   WifiOff
 } from "lucide-react";
 import {
-  Area,
-  AreaChart,
+  Line,
+  LineChart,
   Bar,
   BarChart,
   CartesianGrid,
@@ -140,11 +142,6 @@ function App() {
   const metrics = data?.config?.metrics || {};
   const activeAlerts = alerts.filter((a) => !["RESOLVED", "FALSE_POSITIVE"].includes(a.status));
   const latestByMetric = data?.summary.latest_readings || {};
-  const chartRows = useMemo(() => measurements
-    .filter((m) => ["heart_rate", "sleep_duration", "fatigue", "stress", "hydration"].includes(m.metric_type))
-    .slice(0, 90)
-    .reverse()
-    .map((m) => ({ time: new Date(m.measured_at).toLocaleDateString(), metric: m.metric_type, value: m.value })), [measurements]);
 
   if (!data) return <main className="boot"><RefreshCw className="spin" /> Loading ORBIT...</main>;
 
@@ -177,14 +174,10 @@ function App() {
         </section>}
 
         {active === "timeline" && <section>
+          <HealthTimeline metrics={metrics} revision={data} />
           <Panel title="Health Timeline">
             <TimelineRail rows={measurements.slice(0, 18)} alerts={alerts.slice(0, 3)} />
           </Panel>
-          <div className="grid two">
-            <Panel title="Shared Health Timeline"><Chart rows={chartRows} /></Panel>
-            <Panel title="Quality Mix"><QualityChart rows={measurements} /></Panel>
-          </div>
-          <MeasurementTable rows={measurements.slice(0, 120)} />
         </section>}
 
         {active === "investigator" && <section className="grid two">
@@ -362,8 +355,86 @@ function ImportResult({ result, imported }: any) {
   </div>;
 }
 
-function Chart({ rows }: any) {
-  return <ResponsiveContainer width="100%" height={260}><AreaChart data={rows}><CartesianGrid strokeDasharray="3 3" stroke="#26374f" /><XAxis dataKey="time" stroke="#9db2ce" /><YAxis stroke="#9db2ce" /><Tooltip contentStyle={{ background: "#111c2d", border: "1px solid #2a3d58" }} /><Area dataKey="value" stroke="#60c7d0" fill="#22515f" /></AreaChart></ResponsiveContainer>;
+function HealthTimeline({ metrics, revision }: any) {
+  const [metric, setMetric] = useState("heart_rate");
+  const [rows, setRows] = useState<Measurement[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [retry, setRetry] = useState(0);
+  const [start, setStart] = useState("");
+  const [end, setEnd] = useState("");
+  const [source, setSource] = useState("all");
+  const [quality, setQuality] = useState("all");
+  const [style, setStyle] = useState("line");
+  const [page, setPage] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError("");
+    setRows([]);
+    api(`/api/measurements?metric=${encodeURIComponent(metric)}&limit=all`).then((result) => {
+      if (!cancelled) setRows(result);
+    }).catch((err) => { if (!cancelled) setError(err.message || "Could not load readings"); }).finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [metric, revision, retry]);
+  useEffect(() => { setPage(0); }, [metric, start, end, source, quality, rows]);
+  const invalidRange = !!start && !!end && start > end;
+  const filtered = useMemo(() => {
+    if (invalidRange) return [];
+    const from = start ? new Date(`${start}T00:00:00`).getTime() : -Infinity;
+    const until = end ? new Date(`${end}T23:59:59.999`).getTime() : Infinity;
+    return rows.filter((row) => {
+      const time = new Date(row.measured_at).getTime();
+      return Number.isFinite(time) && Number.isFinite(row.value) && time >= from && time <= until && (source === "all" || row.source === source) && (quality === "all" || row.quality_status === quality);
+    }).sort((a, b) => new Date(a.measured_at).getTime() - new Date(b.measured_at).getTime());
+  }, [rows, start, end, source, quality, invalidRange]);
+  const points = filtered.map((row) => ({ ...row, timestamp: new Date(row.measured_at).getTime() }));
+  const config = metrics[metric] || {};
+  const unit = displayUnit(config.unit || "");
+  const sources = [...new Set(rows.map((row) => row.source))].sort();
+  const average = filtered.length ? filtered.reduce((sum, row) => sum + row.value, 0) / filtered.length : null;
+  const flagged = filtered.filter((row) => row.quality_status !== "valid" || row.quality_flags?.length).length;
+  const lastPage = Math.max(0, Math.ceil(filtered.length / 50) - 1);
+  const currentPage = Math.min(page, lastPage);
+  const chartProps = { data: points, margin: { top: 12, right: 12, left: 0, bottom: 20 } };
+  const axes = <>
+    <CartesianGrid strokeDasharray="3 3" stroke="#26374f" />
+    <XAxis dataKey="timestamp" type="number" domain={["dataMin", "dataMax"]} stroke="#9db2ce" tickFormatter={(value) => new Date(value).toLocaleDateString(undefined, { month: "short", day: "numeric" })} minTickGap={35} />
+    <YAxis width={55} stroke="#9db2ce" domain={["auto", "auto"]} />
+    <Tooltip content={<ReadingTooltip label={config.label} unit={unit} />} />
+  </>;
+  return <div className="timeline-review">
+    <h2>Health graphs</h2>
+    <div className="graph-controls">
+      <label>Health metric<select aria-label="Health metric" value={metric} onChange={(event) => { setMetric(event.target.value); setSource("all"); }}>{Object.entries(metrics).map(([key, value]: any) => <option key={key} value={key}>{value.label}</option>)}</select></label>
+      <label>From<input type="date" value={start} max={end || undefined} onInput={(event) => setStart(event.currentTarget.value)} onChange={(event) => setStart(event.target.value)} /></label>
+      <label>To<input type="date" value={end} min={start || undefined} onInput={(event) => setEnd(event.currentTarget.value)} onChange={(event) => setEnd(event.target.value)} /></label>
+      <label>Source<select aria-label="Source" value={source} onChange={(event) => setSource(event.target.value)}><option value="all">All sources</option>{sources.map((value) => <option key={value} value={value}>{value.replaceAll("_", " ")}</option>)}</select></label>
+      <label>Quality<select aria-label="Quality" value={quality} onChange={(event) => setQuality(event.target.value)}><option value="all">All records</option><option value="valid">Valid</option><option value="questionable">Questionable</option><option value="invalid">Invalid</option></select></label>
+      <label>Graph<select aria-label="Graph type" value={style} onChange={(event) => setStyle(event.target.value)}><option value="line">Line</option><option value="bar">Bar</option></select></label>
+      <button title="Reset graph filters" aria-label="Reset graph filters" onClick={() => { setStart(""); setEnd(""); setSource("all"); setQuality("all"); }}><RefreshCw size={16} /></button>
+    </div>
+    <div className="graph-heading"><h3>{config.label} <span>({unit})</span></h3><span>{Intl.DateTimeFormat().resolvedOptions().timeZone}</span></div>
+    {invalidRange && <p role="alert" className="reading-warning">The start date must be on or before the end date.</p>}
+    <div className="health-graph" aria-label={`${config.label} graph`} aria-busy={loading}>
+      {loading ? <p role="status">Loading readings...</p> : error ? <div role="alert"><p>{error}</p><button onClick={() => setRetry(retry + 1)}><RefreshCw size={16} /> Retry</button></div> : !points.length ? <p>No readings for this metric and date range.</p> : <ResponsiveContainer width="100%" height="100%">{style === "line" ? <LineChart {...chartProps}>{axes}<Line type="linear" dataKey="value" name={config.label} stroke="#60c7d0" strokeWidth={2} isAnimationActive={false} dot={(props: any) => <circle key={props.payload.measurement_id} cx={props.cx} cy={props.cy} r={3} fill={props.payload.quality_status !== "valid" || props.payload.quality_flags?.length ? "#ffd166" : "#60c7d0"} />} /></LineChart> : <BarChart {...chartProps}>{axes}<Bar dataKey="value" name={config.label} fill="#60c7d0" maxBarSize={32} isAnimationActive={false} /></BarChart>}</ResponsiveContainer>}
+    </div>
+    {!loading && !error && <>
+      <dl className="graph-summary"><div><dt>Readings</dt><dd>{filtered.length}</dd></div><div><dt>Latest</dt><dd>{filtered.at(-1)?.value ?? "--"} {unit}</dd></div><div><dt>Average</dt><dd>{average === null ? "--" : format(average)} {unit}</dd></div><div><dt>Flagged</dt><dd>{flagged}</dd></div></dl>
+      <MeasurementTable rows={[...filtered].reverse().slice(currentPage * 50, (currentPage + 1) * 50)} />
+      <div className="record-pagination"><button aria-label="Previous records" title="Previous records" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}><ChevronLeft size={16} /></button><span>Page {currentPage + 1} of {lastPage + 1} · {filtered.length} records</span><button aria-label="Next records" title="Next records" disabled={currentPage >= lastPage} onClick={() => setPage(currentPage + 1)}><ChevronRight size={16} /></button></div>
+    </>}
+  </div>;
+}
+
+function ReadingTooltip({ active, payload, label, unit }: any) {
+  if (!active || !payload?.length) return null;
+  const row = payload[0].payload;
+  return <div className="reading-chart-tooltip"><strong>{label}: {row.value} {unit}</strong><p>{new Date(row.measured_at).toLocaleString()}</p><p>{row.source.replaceAll("_", " ")} · {row.quality_status}</p>{!!row.quality_flags?.length && <p className="reading-warning">{row.quality_flags.join(", ")}</p>}</div>;
+}
+
+function displayUnit(unit: string) {
+  return ({ percent: "%", c: "°C", hours: "h", minutes: "min", score_1_10: "/10", score_0_10: "/10", score_1_5: "/5" } as Record<string, string>)[unit] || unit;
 }
 
 function QualityChart({ rows }: { rows: Measurement[] }) {

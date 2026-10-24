@@ -45,7 +45,8 @@ aside {
 .brand strong { display: block; font-size: 27px; letter-spacing: 3px; color: var(--accent); }
 .brand span, .muted, .eyebrow { color: var(--muted); }
 aside button { width: 100%; margin-bottom: 8px; }
-main { padding: 24px; max-width: 1500px; width: 100%; }
+main { padding: 24px; max-width: 1500px; width: 100%; min-width: 0; }
+.panel { min-width: 0; }
 header { display: flex; justify-content: space-between; gap: 16px; align-items: center; margin-bottom: 18px; }
 h1, h2, h3, p { margin-top: 0; }
 h1 { font-size: clamp(28px, 4vw, 44px); margin-bottom: 0; }
@@ -347,6 +348,29 @@ textarea { width: 100%; min-height: 150px; margin-bottom: 10px; }
   gap: 0;
   overflow-x: auto;
   padding: 10px 0 2px;
+}
+.timeline-review { margin-bottom: 24px; min-width: 0; }
+.graph-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; padding: 12px 0 18px; border-bottom: 1px solid var(--line); }
+.graph-controls label { display: grid; gap: 5px; font-size: 12px; color: var(--muted); min-width: 0; }
+.graph-controls select, .graph-controls input { max-width: 100%; min-width: 0; }
+.graph-heading { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 8px; margin: 20px 0 8px; }
+.graph-heading h3 { font-size: 18px; margin: 0; }
+.graph-heading span { color: var(--muted); font-size: 12px; }
+.health-graph { height: 340px; min-width: 0; width: 100%; }
+.health-graph > p, .health-graph > div[role="alert"] { padding: 90px 12px; text-align: center; color: var(--muted); }
+.graph-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0 0 18px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.graph-summary > div { padding: 12px 8px; min-width: 0; overflow-wrap: anywhere; }
+.graph-summary dt { color: var(--muted); font-size: 12px; }
+.graph-summary dd { margin: 4px 0 0; font-size: 18px; }
+.reading-chart-tooltip { max-width: 260px; padding: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; overflow-wrap: anywhere; }
+.reading-chart-tooltip p { margin: 6px 0 0; color: var(--muted); font-size: 12px; }
+.record-pagination { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 12px 0; }
+.record-pagination span { color: var(--muted); font-size: 12px; text-align: center; }
+@media (max-width: 720px) {
+  .graph-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .graph-controls > button { width: fit-content; }
+  .health-graph { height: 280px; }
+  .graph-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 .timeline-event {
   position: relative;

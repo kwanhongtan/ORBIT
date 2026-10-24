@@ -107,7 +107,7 @@ const server = http.createServer(safe(async (req, res) => {
     let rows = [...state.measurements].sort((a, b) => new Date(b.measured_at) - new Date(a.measured_at));
     if (metric) rows = rows.filter((m) => m.metric_type === metric);
     if (source) rows = rows.filter((m) => m.source === source);
-    return send(res, 200, rows.slice(0, Number(url.searchParams.get("limit") || 500)));
+    return send(res, 200, url.searchParams.get("limit") === "all" ? rows : rows.slice(0, Number(url.searchParams.get("limit") || 500)));
   }
   if (req.method === "POST" && url.pathname === "/api/measurements") {
     const measurement = createMeasurement(await body(req), state);
