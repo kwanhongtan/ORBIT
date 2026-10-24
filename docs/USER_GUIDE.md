@@ -32,6 +32,8 @@ The assistant screen generates a local structured fallback explanation. It is no
 
 Generate reproducible scenarios, reset demo data with confirmation, export measurements, alerts, and follow-ups as CSV, or paste CSV in the documented template format to import measurements with validation.
 
+The isolated unusual measurement scenario places one heart-rate spike on a seeded random interior day, excluding the first and last days when generating at least three days. A two-day run uses the first day. The same seed reproduces its position. An investigation of the latest readings may no longer include a spike that occurred earlier; use Health Timeline to review it. Existing generated batches are unchanged, and repeating the same scenario, days, and seed is skipped as a duplicate batch.
+
 Select a CSV file (up to 1 MB) or paste its contents, then choose **Validate CSV**. Review the ready count, rejected records, duplicate count, and first 20 accepted records. Choose **Import Valid Records** to save only accepted records. Validation does not import data; imported records are revalidated before saving.
 
 Required columns: `crew_id`, `metric_type`, `value`, `measured_at`. Optional columns include `unit`, `source`, and `notes`. Use `crew-aurora` for the current crew and ISO timestamps with a timezone, such as `2026-10-24T08:00:00Z`. Vendor exports with other headers need mapping to this schema. See `data/import_template.csv` for an example.

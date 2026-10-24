@@ -46,9 +46,31 @@ test("isolated unusual measurement does not become multi-signal finding", () => 
   const state = initialState();
   generateScenario(state, { scenario: "stable_baseline", days: 12, seed: 31 });
   generateScenario(state, { scenario: "isolated_unusual", days: 4, seed: 32 });
-  const investigation = runInvestigation(state);
+  const spike = state.measurements.find((row) => row.scenario_id === "isolated_unusual" && row.metric_type === "heart_rate" && row.value > 90);
+  const investigation = runInvestigation(state, "crew-aurora", new Date(spike.measured_at));
   assert.equal(investigation.severity, "LOW");
   assert.equal(state.alerts.length, 0);
+});
+
+test("isolated spike occurs on a reproducible interior day and varies by seed", () => {
+  const positions = new Set();
+  const generate = (days, seed) => {
+    const state = initialState();
+    generateScenario(state, { scenario: "isolated_unusual", days, seed });
+    return state.measurements.filter((row) => row.metric_type === "heart_rate");
+  };
+  for (let seed = 1; seed <= 20; seed += 1) {
+    const rows = generate(12, seed);
+    const spikes = rows.filter((row) => row.value > 90);
+    assert.equal(spikes.length, 1);
+    const position = rows.indexOf(spikes[0]);
+    assert.ok(position > 0 && position < rows.length - 1);
+    positions.add(position);
+    assert.deepEqual(rows.map((row) => [row.measured_at, row.value]), generate(12, seed).map((row) => [row.measured_at, row.value]));
+  }
+  assert.ok(positions.size > 1);
+  assert.equal(generate(3, 42).findIndex((row) => row.value > 90), 1);
+  assert.equal(generate(2, 42).findIndex((row) => row.value > 90), 0);
 });
 
 test("poor-quality data is flagged and excluded from reliable evidence", () => {

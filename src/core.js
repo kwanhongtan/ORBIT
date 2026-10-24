@@ -388,6 +388,11 @@ export function generateScenario(state, { scenario = "stable_baseline", days = 7
   const existingBatch = state.measurements.some((m) => m.generated_batch_id === batch);
   if (existingBatch) return { batch_id: batch, created: 0, skipped_duplicate_batch: true };
   const rand = seeded(seed);
+  // A separate stream keeps the background readings unchanged when placing the spike.
+  const positionRandom = seeded(seed);
+  positionRandom();
+  positionRandom();
+  const unusualDay = days > 2 ? 1 + Math.floor(positionRandom() * (days - 2)) : 0;
   const created = [];
   const latest = state.measurements
     .filter((m) => m.crew_id === crew_id)
@@ -407,7 +412,7 @@ export function generateScenario(state, { scenario = "stable_baseline", days = 7
     metrics.mood -= drift * 3;
     metrics.symptom_severity += drift * 3;
     metrics.hydration -= drift * 2.5;
-    if (scenario === "isolated_unusual" && day === days - 1) metrics.heart_rate += 28;
+    if (scenario === "isolated_unusual" && day === unusualDay) metrics.heart_rate += 28;
     for (const [metric, value] of Object.entries(metrics)) {
       let finalValue = round(normal(rand, value, metric.includes("duration") ? 0.3 : 1.7));
       if (["sleep_quality", "fatigue", "activity_level", "hydration", "stress"].includes(metric)) finalValue = Math.max(METRICS[metric].min, Math.min(METRICS[metric].max, Math.round(finalValue)));

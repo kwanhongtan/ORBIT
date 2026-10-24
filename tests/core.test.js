@@ -40,7 +40,8 @@ test("isolated unusual measurement does not become multi-signal finding", () => 
   const state = initialState();
   generateScenario(state, { scenario: "stable_baseline", days: 12, seed: 31 });
   generateScenario(state, { scenario: "isolated_unusual", days: 4, seed: 32 });
-  const investigation = runInvestigation(state);
+  const spike = state.measurements.find((row) => row.scenario_id === "isolated_unusual" && row.metric_type === "heart_rate" && row.value > 90);
+  const investigation = runInvestigation(state, "crew-aurora", new Date(spike.measured_at));
   assert.equal(investigation.severity, "LOW");
   assert.equal(state.alerts.length, 0);
 });
