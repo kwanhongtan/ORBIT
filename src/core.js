@@ -433,6 +433,23 @@ export function clearDemoData(state) {
   return { removed: before - state.measurements.length };
 }
 
+export function latestReadings(state, crewId = "crew-aurora", currentTime = new Date()) {
+  const latest = {};
+  for (const row of state.measurements) {
+    if (row.crew_id !== crewId || !METRICS[row.metric_type]) continue;
+    const timestamp = new Date(row.measured_at).getTime();
+    if (!Number.isFinite(timestamp)) continue;
+    if (!latest[row.metric_type] || timestamp > new Date(latest[row.metric_type].measured_at).getTime()) {
+      latest[row.metric_type] = row;
+    }
+  }
+  return Object.fromEntries(Object.entries(latest).map(([metric, row]) => {
+    const ageHours = (currentTime.getTime() - new Date(row.measured_at).getTime()) / 36e5;
+    const freshness = ageHours < 0 ? "future" : ageHours > METRICS[metric].staleHours ? "stale" : "current";
+    return [metric, { ...row, freshness, age_hours: round(ageHours) }];
+  }));
+}
+
 export function summary(state) {
   const latest = [...state.measurements].sort((a, b) => new Date(b.measured_at) - new Date(a.measured_at))[0];
   return {
@@ -446,6 +463,7 @@ export function summary(state) {
       open_followups: state.followUps.filter((f) => !["COMPLETED", "CANCELLED"].includes(f.status)).length
     },
     latest_measurement_at: latest?.measured_at || null,
+    latest_readings: latestReadings(state, state.crew[0]?.crew_id),
     latest_investigation: state.investigations[0] || null,
     latest_ai: state.aiExplanations[0] || null
   };

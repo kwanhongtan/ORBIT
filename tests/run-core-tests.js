@@ -8,7 +8,8 @@ import {
   transitionAlert,
   createFollowUp,
   updateFollowUp,
-  localAiExplanation
+  localAiExplanation,
+  latestReadings
 } from "../src/core.js";
 
 const tests = [];
@@ -103,6 +104,33 @@ test("simulator includes self-assessment and mission context metrics", () => {
   assert.equal(state.measurements.some((m) => m.metric_type === "symptom_severity"), true);
   assert.equal(state.measurements.some((m) => m.metric_type === "radiation_dose"), true);
   assert.equal(state.measurements.some((m) => m.metric_type === "bone_assessment"), true);
+});
+
+test("latest readings use full crew history without hiding questionable records", () => {
+  const state = initialState();
+  state.measurements.push({ crew_id: "crew-aurora", metric_type: "heart_rate", value: 72, measured_at: "2026-10-20T08:00:00Z", quality_status: "valid", quality_flags: [] });
+  state.measurements.push({ crew_id: "crew-aurora", metric_type: "heart_rate", value: 80, measured_at: "2026-10-21T08:00:00Z", quality_status: "questionable", quality_flags: ["duplicate"] });
+  state.measurements.push({ crew_id: "other-crew", metric_type: "heart_rate", value: 100, measured_at: "2026-10-22T08:00:00Z" });
+  state.measurements.push({ crew_id: "crew-aurora", metric_type: "blood_oxygen", value: 98, measured_at: "2026-10-20T08:00:00Z", quality_status: "valid", quality_flags: [] });
+  const snapshot = JSON.stringify(state.measurements);
+  const readings = latestReadings(state, "crew-aurora", new Date("2026-10-21T09:00:00Z"));
+  assert.equal(readings.heart_rate.value, 80);
+  assert.equal(readings.heart_rate.quality_status, "questionable");
+  assert.deepEqual(readings.heart_rate.quality_flags, ["duplicate"]);
+  assert.equal(readings.heart_rate.freshness, "current");
+  assert.equal(readings.blood_oxygen.value, 98);
+  assert.equal(JSON.stringify(state.measurements), snapshot);
+});
+
+test("reading freshness is recalculated with metric-specific intervals", () => {
+  const state = initialState();
+  for (const metric of ["heart_rate", "radiation_dose"]) state.measurements.push({ crew_id: "crew-aurora", metric_type: metric, value: 1, measured_at: "2026-10-20T08:00:00Z", quality_status: "valid" });
+  let readings = latestReadings(state, "crew-aurora", new Date("2026-10-22T08:00:00Z"));
+  assert.equal(readings.heart_rate.freshness, "stale");
+  assert.equal(readings.radiation_dose.freshness, "current");
+  readings = latestReadings(state, "crew-aurora", new Date("2026-10-20T07:59:00Z"));
+  assert.equal(readings.heart_rate.freshness, "future");
+  assert.equal(latestReadings(initialState()).heart_rate, undefined);
 });
 
 let passed = 0;

@@ -84,7 +84,7 @@ h2 { font-size: 18px; margin-bottom: 14px; }
   padding: 5px 10px;
   margin-bottom: 18px;
 }
-.hero-copy h2 { font-size: clamp(34px, 5vw, 58px); line-height: 1.02; margin-bottom: 14px; max-width: 760px; }
+.hero-copy h2 { font-size: 28px; line-height: 1.15; margin-bottom: 14px; max-width: 760px; }
 .hero-copy p { color: #c7d7ea; font-size: 16px; max-width: 680px; }
 .hero-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 18px; }
 .hero-stats span {
@@ -118,15 +118,19 @@ h2 { font-size: 18px; margin-bottom: 14px; }
     linear-gradient(90deg, transparent, rgba(96,199,208,.05), transparent);
   pointer-events: none;
 }
-.reference-body img {
+.body-figure {
   position: absolute;
   left: 50%;
   top: 50%;
   z-index: 2;
   height: min(92%, 352px);
-  width: auto;
-  object-fit: contain;
+  aspect-ratio: 186 / 360;
   transform: translate(-50%, -50%);
+}
+.reference-body img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
   filter: drop-shadow(0 0 18px rgba(0,216,255,.5)) saturate(1.12) contrast(1.08) brightness(1.02);
   mask-image: linear-gradient(90deg, transparent 0%, #000 10%, #000 90%, transparent 100%), linear-gradient(180deg, transparent 0%, #000 5%, #000 95%, transparent 100%);
   -webkit-mask-image: linear-gradient(90deg, transparent 0%, #000 10%, #000 90%, transparent 100%), linear-gradient(180deg, transparent 0%, #000 5%, #000 95%, transparent 100%);
@@ -181,6 +185,7 @@ h2 { font-size: 18px; margin-bottom: 14px; }
   border-radius: inherit;
 }
 .body-hotspot:hover,
+.body-hotspot.pinned,
 .body-hotspot:focus,
 .body-hotspot:focus-visible {
   background: #ffffff;
@@ -190,7 +195,8 @@ h2 { font-size: 18px; margin-bottom: 14px; }
 .hotspot-tooltip {
   position: absolute;
   top: 50%;
-  min-width: 92px;
+  width: 160px;
+  overflow-wrap: anywhere;
   border: 1px solid rgba(143,247,255,.42);
   border-radius: 8px;
   background: rgba(8,17,31,.92);
@@ -205,6 +211,7 @@ h2 { font-size: 18px; margin-bottom: 14px; }
 .tip-left .hotspot-tooltip { right: calc(100% + 16px); }
 .tip-right .hotspot-tooltip { left: calc(100% + 16px); }
 .body-hotspot:hover .hotspot-tooltip,
+.body-hotspot.pinned .hotspot-tooltip,
 .body-hotspot:focus .hotspot-tooltip,
 .body-hotspot:focus-visible .hotspot-tooltip {
   opacity: 1;
@@ -224,9 +231,12 @@ h2 { font-size: 18px; margin-bottom: 14px; }
   line-height: 1.05;
   margin: 3px 0;
 }
+.hotspot-tooltip b em { display: inline; font-size: 13px; }
+.hotspot-tooltip .reading-meta { margin-top: 8px; font-size: 11px; line-height: 1.35; }
+.hotspot-tooltip small { line-height: 1.35; }
 .hotspot-stress { left: 50%; top: 16%; }
-.hotspot-oxygen { left: 50%; top: 38%; }
-.hotspot-cardio { left: 48.3%; top: 44%; }
+.hotspot-oxygen { left: 13.5%; top: 55.8%; }
+.hotspot-cardio { left: 57%; top: 29.5%; }
 .hotspot-fatigue { left: 50%; top: 82%; }
 .hotspot-dose {
   left: 52%;
@@ -244,6 +254,16 @@ h2 { font-size: 18px; margin-bottom: 14px; }
 .warning .hotspot-tooltip {
   border-color: rgba(255,209,102,.48);
 }
+.latest-readings { margin-top: 22px; }
+.reading-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-top: 1px solid var(--line); }
+.reading-item { padding: 16px 12px; border-bottom: 1px solid var(--line); min-width: 0; overflow-wrap: anywhere; }
+.reading-item h3 { font-size: 14px; margin-bottom: 6px; }
+.reading-value { font-size: 24px; margin-bottom: 5px; }
+.reading-value small { font-size: 13px; color: var(--muted); }
+.reading-context { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.reading-meta { display: grid; gap: 3px; font-size: 12px; color: var(--muted); text-transform: none; }
+.reading-warning { color: var(--yellow); }
+.reading-ok { color: var(--green); }
 .health-node {
   position: absolute;
   z-index: 5;
@@ -350,6 +370,7 @@ textarea { width: 100%; min-height: 150px; margin-bottom: 10px; }
 .spin { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (max-width: 980px) {
+  .reading-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .shell { grid-template-columns: 1fr; }
   aside { position: static; height: auto; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
   .brand { grid-column: 1 / -1; margin-bottom: 4px; }

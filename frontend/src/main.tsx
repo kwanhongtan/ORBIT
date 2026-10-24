@@ -39,6 +39,7 @@ type Measurement = {
   source: string;
   quality_status: string;
   quality_flags: string[];
+  freshness?: "current" | "stale" | "future";
 };
 
 type Alert = {
@@ -133,7 +134,7 @@ function App() {
   const investigations: Investigation[] = data?.investigations || [];
   const metrics = data?.config?.metrics || {};
   const activeAlerts = alerts.filter((a) => !["RESOLVED", "FALSE_POSITIVE"].includes(a.status));
-  const latestByMetric = useMemo(() => latestMetrics(measurements), [measurements]);
+  const latestByMetric = data?.summary.latest_readings || {};
   const chartRows = useMemo(() => measurements
     .filter((m) => ["heart_rate", "sleep_duration", "fatigue", "stress", "hydration"].includes(m.metric_type))
     .slice(0, 90)
@@ -157,6 +158,7 @@ function App() {
 
         {active === "overview" && <section>
           <MissionHero summary={data.summary} activeAlerts={activeAlerts} latest={latestByMetric} />
+          <LatestReadings latest={latestByMetric} metrics={metrics} />
           <div className="kpis compact">
             <MetricCard label="Unified Records" value={data.summary.counts.measurements} hint={`${data.summary.counts.valid_measurements} validated readings`} icon={<Activity />} />
             <MetricCard label="Quality Flags" value={data.summary.counts.quality_warnings} hint="Invalid, stale, duplicate, or uncertain" icon={<ShieldCheck />} />
@@ -271,8 +273,8 @@ function MissionHero({ summary, activeAlerts, latest }: any) {
   return <div className="mission-hero">
     <div className="hero-copy">
       <span className="tag">Software-only prototype · Local-first</span>
-      <h2>Personalised astronaut health investigation and response</h2>
-      <p>ORBIT connects simulated sensor readings, daily check-ins, baseline intelligence, data-quality review, and follow-up actions into one traceable mission-health workflow.</p>
+      <h2>Crew health overview</h2>
+      <p>{summary.crew.name}</p>
       <div className="hero-stats">
         <span><b>{status}</b>Current status</span>
         <span><b>{summary.crew.name}</b>Fictional crew profile</span>
@@ -285,23 +287,49 @@ function MissionHero({ summary, activeAlerts, latest }: any) {
 
 function BodyModel({ latest }: any) {
   return <div className="body-model reference-body" aria-label="Reference wireframe adult health model">
-    <img src="/images/wireframe-human-front.png" alt="Cyan wireframe adult body front view" />
-    <HealthHotspot className="hotspot-stress" label="Stress" value={latest.stress?.value ?? "--"} unit="/10" side="left" />
-    <HealthHotspot className="hotspot-oxygen" label="Oxygen" value={latest.blood_oxygen?.value ?? "--"} unit="%" side="right" />
-    <HealthHotspot className="hotspot-cardio" label="Cardio" value={latest.heart_rate?.value ?? "--"} unit="bpm" side="left" />
-    <HealthHotspot className="hotspot-dose" label="Dose" value={latest.radiation_dose?.value ?? "--"} unit="mSv" side="right" tone="warning" />
-    <HealthHotspot className="hotspot-fatigue" label="Fatigue" value={latest.fatigue?.value ?? "--"} unit="/10" side="right" />
+    <div className="body-figure">
+      <img src="/images/wireframe-human-front.png" alt="Cyan wireframe adult body front view" />
+      <HealthHotspot className="hotspot-oxygen" label="Blood oxygen" reading={latest.blood_oxygen} unit="%" side="right" location="Whole-body oxygenation; fingertip sampling site" />
+      <HealthHotspot className="hotspot-cardio" label="Heart rate" reading={latest.heart_rate} unit="bpm" side="left" location="Cardiovascular signal" />
+    </div>
   </div>;
 }
 
-function HealthHotspot({ className, label, value, unit, side, tone }: any) {
-  return <button className={`body-hotspot ${className} ${side === "left" ? "tip-left" : "tip-right"} ${tone || ""}`} aria-label={`${label}: ${value} ${unit}`}>
-    <span className="hotspot-tooltip"><small>{label}</small><b>{value}</b><em>{unit}</em></span>
+function HealthHotspot({ className, label, reading, unit, side, location }: any) {
+  const [pinned, setPinned] = useState(false);
+  const id = `tip-${className}`;
+  return <button className={`body-hotspot ${className} ${side === "left" ? "tip-left" : "tip-right"} ${pinned ? "pinned" : ""}`} aria-label={`${label}: ${reading?.value ?? "No reading"} ${reading ? unit : ""}`} aria-describedby={id} aria-expanded={pinned} onClick={() => setPinned(!pinned)} onKeyDown={(event) => { if (event.key === "Escape") { setPinned(false); event.currentTarget.blur(); } }}>
+    <span id={id} role="tooltip" className="hotspot-tooltip"><small>{label}</small><b>{reading?.value ?? "--"} <em>{unit}</em></b><small>{location}</small><ReadingMeta reading={reading} /></span>
   </button>;
 }
 
-function HealthNode({ className, label, value, unit }: any) {
-  return <div className={`health-node ${className}`}><i></i><span>{label}</span><b>{value}</b><small>{unit}</small></div>;
+function ReadingMeta({ reading }: { reading?: Measurement }) {
+  if (!reading) return <span className="reading-meta">No reading recorded</span>;
+  const needsReview = reading.quality_status !== "valid" || !!reading.quality_flags?.length;
+  const quality = needsReview ? "Needs verification" : "Passed input checks";
+  return <span className="reading-meta">
+    <time dateTime={reading.measured_at}>{new Date(reading.measured_at).toLocaleString()}</time>
+    <span>{reading.source.replaceAll("_", " ")}</span>
+    <span className={reading.freshness !== "current" || needsReview ? "reading-warning" : "reading-ok"}>{quality} · {reading.freshness === "future" ? "Future timestamp" : reading.freshness === "stale" ? "Outdated" : "Within update interval"}</span>
+    {!!reading.quality_flags?.length && <span>{reading.quality_flags.map((flag) => flag.replaceAll("_", " ")).join(", ")}</span>}
+  </span>;
+}
+
+function LatestReadings({ latest, metrics }: any) {
+  return <section className="latest-readings" aria-label="Latest health readings">
+    <h2>Latest readings</h2>
+    <div className="reading-grid">{Object.entries(metrics).map(([metric, config]: [string, any]) => {
+      const reading = latest[metric];
+      const context = ["stress", "fatigue", "mood", "hydration", "symptom_severity", "activity_level"].includes(metric) ? "Whole-body / self-report" : metric === "radiation_dose" || metric === "bone_assessment" ? "Prototype placeholder" : null;
+      const unit = ({ percent: "%", c: "°C", hours: "h", minutes: "min", score_1_10: "/10", score_0_10: "/10", score_1_5: "/5" } as Record<string, string>)[config.unit] || config.unit;
+      return <article className="reading-item" key={metric}>
+        <h3>{config.label}</h3>
+        <p className="reading-value">{reading?.value ?? "--"} <small>{unit}</small></p>
+        {context && <span className="reading-context">{context}</span>}
+        <ReadingMeta reading={reading} />
+      </article>;
+    })}</div>
+  </section>;
 }
 
 function Panel({ title, children }: any) {
@@ -363,13 +391,6 @@ function Checklist({ items }: { items?: string[] }) {
 
 function labelFor(name: string, metrics: any) {
   return metrics[name]?.label || name.replaceAll("_", " ");
-}
-
-function latestMetrics(rows: Measurement[]) {
-  return rows.reduce((acc: any, row) => {
-    if (!acc[row.metric_type] || new Date(row.measured_at) > new Date(acc[row.metric_type].measured_at)) acc[row.metric_type] = row;
-    return acc;
-  }, {});
 }
 
 createRoot(document.getElementById("root")!).render(<App />);
