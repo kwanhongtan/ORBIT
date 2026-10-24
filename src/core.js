@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { parse } from "csv-parse/sync";
 
 export const METRICS = {
   heart_rate: { label: "Heart Rate", unit: "bpm", min: 35, max: 210, staleHours: 36 },
@@ -71,8 +72,11 @@ export function normal(rand, mean, spread) {
 }
 
 export function validateMeasurement(input, existing = [], currentTime = new Date()) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return { valid: false, errors: ["measurement must be an object"], duplicate: false, qualityFlags: ["invalid"] };
+  }
   const errors = [];
-  const metric = METRICS[input.metric_type];
+  const metric = Object.hasOwn(METRICS, input.metric_type) ? METRICS[input.metric_type] : null;
   const measured = new Date(input.measured_at);
   const hasNumericValue = typeof input.value === "number" || (typeof input.value === "string" && input.value.trim() !== "");
   const value = hasNumericValue ? Number(input.value) : NaN;
@@ -485,25 +489,51 @@ export function csv(rows) {
 }
 
 export function parseCsv(text) {
-  const lines = text.trim().split(/\r?\n/);
-  if (!lines.length) return [];
-  const headers = splitCsvLine(lines[0]);
-  return lines.slice(1).filter(Boolean).map((line) => Object.fromEntries(splitCsvLine(line).map((v, i) => [headers[i], v])));
+  try {
+    if (!text.trim()) throw new Error("CSV is empty");
+    return parse(text, {
+      bom: true,
+      trim: true,
+      skip_empty_lines: true,
+      max_record_size: 100000,
+      columns: (headers) => {
+        if (new Set(headers).size !== headers.length) throw new Error("CSV contains duplicate column names");
+        for (const column of ["crew_id", "metric_type", "value", "measured_at"]) {
+          if (!headers.includes(column)) throw new Error(`CSV is missing required column: ${column}`);
+        }
+        return headers;
+      }
+    });
+  } catch (err) {
+    throw Object.assign(new Error(`Invalid CSV: ${err.message}`), { status: 400 });
+  }
 }
 
-function splitCsvLine(line) {
-  const out = [];
-  let cur = "";
-  let quoted = false;
-  for (let i = 0; i < line.length; i += 1) {
-    const ch = line[i];
-    if (ch === '"' && line[i + 1] === '"') { cur += '"'; i += 1; }
-    else if (ch === '"') quoted = !quoted;
-    else if (ch === "," && !quoted) { out.push(cur); cur = ""; }
-    else cur += ch;
+export function importMeasurements(state, text, { commit = false, currentTime = new Date() } = {}) {
+  const records = parseCsv(text);
+  const workingState = { ...state, measurements: [...state.measurements] };
+  const accepted = [];
+  const errors = [];
+  let duplicates = 0;
+  for (const [index, row] of records.entries()) {
+    try {
+      if (!state.crew.some((member) => member.crew_id === row.crew_id)) throw new Error("Unknown crew_id");
+      const measurement = createMeasurement({ ...row, source: row.source || "csv_import" }, workingState, currentTime);
+      if (measurement.quality_flags.includes("duplicate")) {
+        duplicates += 1;
+        continue;
+      }
+      accepted.push(measurement);
+      workingState.measurements.push(measurement);
+    } catch (err) {
+      errors.push({ record: index + 1, error: err.message });
+    }
   }
-  out.push(cur);
-  return out;
+  if (commit) {
+    state.measurements.push(...accepted);
+    audit(state, "measurements.imported", "csv", `${accepted.length} accepted; ${errors.length} rejected; ${duplicates} duplicates skipped`);
+  }
+  return { accepted: accepted.length, rejected: errors.length, duplicates, errors, preview: accepted.slice(0, 20), total: records.length };
 }
 
 export function localAiExplanation(state) {

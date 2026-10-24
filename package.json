@@ -8,10 +8,12 @@
     "start": "node server.js",
     "build": "vite build --config frontend/vite.config.ts",
     "dev:frontend": "vite --config frontend/vite.config.ts --host 127.0.0.1",
-    "test": "node tests/run-core-tests.js"
+    "test": "node tests/run-core-tests.js",
+    "typecheck": "tsc -p frontend/tsconfig.json"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^6.1.2",
+    "csv-parse": "^7.0.3",
     "lucide-react": "^1.54.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
@@ -19,5 +21,9 @@
     "three": "^0.186.1",
     "typescript": "^7.0.2",
     "vite": "^8.3.4"
+  },
+  "devDependencies": {
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0"
   }
 }

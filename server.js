@@ -16,7 +16,7 @@ import {
   clearDemoData,
   summary,
   csv,
-  parseCsv,
+  importMeasurements,
   localAiExplanation
 } from "./src/core.js";
 
@@ -55,7 +55,12 @@ function send(res, status, body, headers = {}) {
 
 async function body(req) {
   const chunks = [];
-  for await (const chunk of req) chunks.push(chunk);
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > 1024 * 1024) throw Object.assign(new Error("Request exceeds 1 MB limit"), { status: 413 });
+    chunks.push(chunk);
+  }
   const text = Buffer.concat(chunks).toString("utf8");
   if (!text) return {};
   const type = req.headers["content-type"] || "";
@@ -111,19 +116,9 @@ const server = http.createServer(safe(async (req, res) => {
   }
   if (req.method === "GET" && url.pathname.startsWith("/api/measurements/")) return send(res, 200, state.measurements.find((m) => m.measurement_id === url.pathname.split("/").at(-1)) || {});
   if (req.method === "POST" && url.pathname === "/api/measurements/import") {
-    const text = await body(req);
-    let accepted = 0;
-    const errors = [];
-    for (const [index, row] of parseCsv(String(text)).entries()) {
-      try {
-        state.measurements.push(createMeasurement({ ...row, source: row.source || "imported_sample" }, state));
-        accepted += 1;
-      } catch (err) {
-        errors.push({ row: index + 2, error: err.message });
-      }
-    }
-    return send(res, 200, { accepted, rejected: errors.length, errors });
+    return send(res, 200, importMeasurements(state, String(await body(req)), { commit: true }));
   }
+  if (req.method === "POST" && url.pathname === "/api/measurements/import/preview") return send(res, 200, importMeasurements(state, String(await body(req))));
 
   if (req.method === "GET" && url.pathname === "/api/baselines") return send(res, 200, state.baselines.length ? state.baselines : calculateBaselines(state));
   if (req.method === "POST" && url.pathname === "/api/baselines/recalculate") return send(res, 200, calculateBaselines(state));

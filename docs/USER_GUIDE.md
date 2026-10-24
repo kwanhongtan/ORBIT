@@ -4,6 +4,8 @@
 
 Use this screen to see the fictional mission profile, current telemetry count, quality warnings, active alerts, open follow-ups, and the latest investigator finding.
 
+Latest readings include timestamp, source, input quality, and freshness. These checks do not establish medical normality. The heart-rate and fingertip-oxygen dots show details on hover, keyboard focus, or tap. Whole-body and self-report metrics are listed separately.
+
 ## Health Timeline
 
 Review trends, measurement records, source labels, and quality status.
@@ -27,3 +29,7 @@ The assistant screen generates a local structured fallback explanation. It is no
 ## Data And Simulation Lab
 
 Generate reproducible scenarios, reset demo data with confirmation, export measurements, alerts, and follow-ups as CSV, or paste CSV in the documented template format to import measurements with validation.
+
+Select a CSV file (up to 1 MB) or paste its contents, then choose **Validate CSV**. Review the ready count, rejected records, duplicate count, and first 20 accepted records. Choose **Import Valid Records** to save only accepted records. Validation does not import data; imported records are revalidated before saving.
+
+Required columns: `crew_id`, `metric_type`, `value`, `measured_at`. Optional columns include `unit`, `source`, and `notes`. Use `crew-aurora` for the current crew and ISO timestamps with a timezone, such as `2026-10-24T08:00:00Z`. Vendor exports with other headers need mapping to this schema. See `data/import_template.csv` for an example.

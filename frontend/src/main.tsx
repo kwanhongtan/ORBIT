@@ -97,6 +97,9 @@ function App() {
   const [manualValue, setManualValue] = useState("");
   const [checkin, setCheckin] = useState({ mood: "7", fatigue: "3", stress: "3", sleep_quality: "4", symptom_severity: "0", notes: "" });
   const [csvText, setCsvText] = useState("");
+  const [csvPreview, setCsvPreview] = useState<any>(null);
+  const [csvResult, setCsvResult] = useState<any>(null);
+  const changeCsv = (text: string) => { setCsvText(text); setCsvPreview(null); setCsvResult(null); };
 
   const load = async () => {
     const [summary, measurements, baselines, investigations, alerts, followUps, scenarios, aiStatus, config] = await Promise.all([
@@ -256,8 +259,21 @@ function App() {
             </div>
           </Panel>
           <Panel title="CSV Import">
-            <textarea value={csvText} onChange={(e) => setCsvText(e.target.value)} placeholder="crew_id,metric_type,value,unit,measured_at,source,notes" />
-            <button onClick={() => action(() => api("/api/measurements/import", { method: "POST", headers: { "Content-Type": "text/csv" }, body: csvText }), "CSV imported with validation")}><FileText size={16} /> Import CSV</button>
+            <label className="csv-file">CSV file<input type="file" accept=".csv,text/csv" onChange={async (event) => {
+              const file = event.target.files?.[0];
+              if (!file) return;
+              changeCsv("");
+              try {
+                if (file.size > 1024 * 1024) throw new Error("CSV file exceeds 1 MB limit");
+                changeCsv(await file.text());
+              } catch (err: any) { setMessage(err.message || "Could not read file"); }
+            }} /></label>
+            <textarea aria-label="CSV records" value={csvText} onChange={(e) => changeCsv(e.target.value)} placeholder="crew_id,metric_type,value,unit,measured_at,source,notes" />
+            <div className="toolbar">
+              <button disabled={busy || !csvText.trim()} onClick={() => action(async () => { setCsvResult(null); setCsvPreview(null); setCsvPreview(await api("/api/measurements/import/preview", { method: "POST", headers: { "Content-Type": "text/csv" }, body: csvText })); }, "CSV preview ready")}><FileText size={16} /> Validate CSV</button>
+              <button className="primary" disabled={busy || !csvPreview?.accepted} onClick={() => action(async () => { const result = await api("/api/measurements/import", { method: "POST", headers: { "Content-Type": "text/csv" }, body: csvText }); setCsvResult(result); setCsvPreview(null); }, "CSV import complete")}><Download size={16} /> Import Valid Records</button>
+            </div>
+            {(csvPreview || csvResult) && <ImportResult result={csvResult || csvPreview} imported={!!csvResult} />}
           </Panel>
           </div>
         </section>}
@@ -336,6 +352,14 @@ function LatestReadings({ latest, metrics }: any) {
 
 function Panel({ title, children }: any) {
   return <div className="panel"><h2>{title}</h2>{children}</div>;
+}
+
+function ImportResult({ result, imported }: any) {
+  return <div className="import-result" role="status">
+    <p><strong>{result.accepted} {imported ? "imported" : "ready"}</strong> · {result.rejected} rejected · {result.duplicates} duplicates skipped</p>
+    {!!result.errors.length && <ul>{result.errors.map((item: any) => <li key={item.record}>Record {item.record}: {item.error}</li>)}</ul>}
+    {!!result.preview.length && <div className="table-wrap"><table><thead><tr><th>Metric</th><th>Value</th><th>Time</th><th>Source</th><th>Quality</th></tr></thead><tbody>{result.preview.map((row: Measurement) => <tr key={row.measurement_id}><td>{row.metric_type}</td><td>{row.value} {row.unit}</td><td>{row.measured_at}</td><td>{row.source}</td><td>{row.quality_status} {row.quality_flags.join(", ")}</td></tr>)}</tbody></table></div>}
+  </div>;
 }
 
 function Chart({ rows }: any) {

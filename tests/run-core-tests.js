@@ -9,7 +9,10 @@ import {
   createFollowUp,
   updateFollowUp,
   localAiExplanation,
-  latestReadings
+  latestReadings,
+  parseCsv,
+  importMeasurements,
+  csv
 } from "../src/core.js";
 
 const tests = [];
@@ -144,6 +147,9 @@ test("measurement validation rejects blank values and malformed timestamps clean
     assert.throws(() => createMeasurement({ ...input, measured_at }, state), (err) => err.status === 400 && /timestamp/.test(err.message));
   }
   assert.equal(createMeasurement({ ...input, value: "0" }, state).value, 0);
+  for (const invalid of [null, [], "record", { ...input, metric_type: "__proto__" }]) {
+    assert.throws(() => createMeasurement(invalid, state), (err) => err.status === 400);
+  }
 });
 
 test("flagged future records do not shift the investigation window", () => {
@@ -162,6 +168,32 @@ test("empty investigations identify missing data and insufficient baselines", ()
   assert.equal(result.missing_metrics.length, 6);
   assert.equal(result.insufficient_baselines.length, 6);
   assert.equal(result.evidence.length, 0);
+});
+
+test("CSV parsing supports BOM, quoted commas, newlines and escaped quotes", () => {
+  const rows = [{ crew_id: "crew-aurora", metric_type: "heart_rate", value: 72, measured_at: "2026-10-20T08:00:00Z", notes: 'After exercise, said "fine"\nSecond line' }];
+  const parsed = parseCsv("\ufeff" + csv(rows));
+  assert.equal(parsed.length, 1);
+  assert.equal(parsed[0].notes, rows[0].notes);
+  assert.throws(() => parseCsv("metric_type,value\nheart_rate,72"), (err) => err.status === 400);
+  assert.throws(() => parseCsv('crew_id,metric_type,value,measured_at\n"unclosed'), (err) => err.status === 400);
+});
+
+test("CSV preview does not mutate state and import skips duplicates", () => {
+  const state = initialState();
+  const text = 'crew_id,metric_type,value,unit,measured_at,notes\ncrew-aurora,heart_rate,72,bpm,2026-10-20T08:00:00Z,"Feels fine, rested"\ncrew-aurora,heart_rate,72,bpm,2026-10-20T08:00:00Z,same\ncrew-aurora,stress,,score_1_10,2026-10-20T08:00:00Z,blank\nunknown,stress,3,score_1_10,2026-10-20T08:00:00Z,unknown crew';
+  const currentTime = new Date("2026-10-20T09:00:00Z");
+  const before = JSON.stringify(state);
+  const preview = importMeasurements(state, text, { currentTime });
+  assert.equal(JSON.stringify(state), before);
+  assert.equal(preview.accepted, 1);
+  assert.equal(preview.rejected, 2);
+  assert.equal(preview.duplicates, 1);
+  const imported = importMeasurements(state, text, { currentTime, commit: true });
+  assert.equal(imported.accepted, 1);
+  assert.equal(state.measurements.length, 1);
+  assert.equal(state.measurements[0].source, "csv_import");
+  assert.equal(importMeasurements(state, text, { currentTime, commit: true }).accepted, 0);
 });
 
 let passed = 0;

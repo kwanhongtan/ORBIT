@@ -23,13 +23,16 @@ Input validation, future-record window protection, and explicit investigation co
 
 ## 3. Gemini explanations
 
+Deferred: Gemini's developer service has an 18+ requirement. ORBIT continues using its deterministic local explanations.
+
 - Add a server-side provider using validated evidence, structured responses, timeouts, and local fallback.
 - Keep alert decisions in traceable rules.
-- Requires a Gemini API key supplied through the environment, not committed to Git or entered in chat.
 
 ## 4. Real data source
 
 Selected first source: CSV exports from a device or dataset.
+
+Implemented: file selection, validation preview, per-record errors, duplicate skipping, quoted and multiline field handling, and 1 MB request limit. Files must use the ORBIT columns; vendor-specific mapping requires an example export format.
 
 - Agree on one device or dataset, data format, units, and access method.
 - Add ingestion with source attribution and duplicate handling.
