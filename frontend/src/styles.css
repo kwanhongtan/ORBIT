@@ -277,38 +277,6 @@ h2 { font-size: 18px; margin-bottom: 14px; }
 .deleted-imports summary { cursor: pointer; margin-bottom: 12px; }
 .delete-dialog { width: min(480px, calc(100% - 32px)); max-height: calc(100vh - 32px); overflow: auto; border: 1px solid var(--line); border-radius: 8px; padding: 24px; color: var(--text); background: var(--panel); overflow-wrap: anywhere; }
 .delete-dialog::backdrop { background: rgba(0, 0, 0, .65); }
-.assistant-workspace { max-width: 980px; min-width: 0; }
-.assistant-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; border-bottom: 1px solid var(--line); padding-bottom: 16px; }
-.assistant-header h2 { display: flex; align-items: center; gap: 10px; margin-bottom: 5px; font-size: 21px; }
-.assistant-header span, .message-author, .assistant-generated { color: var(--muted); font-size: 12px; }
-.assistant-thread { min-height: 280px; max-height: 60vh; overflow: auto; overscroll-behavior: contain; padding: 16px 4px; scrollbar-gutter: stable; }
-.assistant-empty { padding: 24px 0; }
-.assistant-empty h3 { font-size: 18px; }
-.assistant-suggestions, .assistant-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.assistant-suggestions button { text-align: left; }
-.assistant-message { padding: 16px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
-.assistant-message.user { border-left: 2px solid var(--accent); padding-left: 14px; }
-.message-author { display: block; margin-bottom: 8px; }
-.question-text { white-space: pre-wrap; margin-bottom: 0; }
-.assistant-answer { font-size: 16px; margin-bottom: 14px; }
-.assistant-section h3 { font-size: 14px; margin: 14px 0 6px; }
-.assistant-section ul { padding-left: 20px; margin: 0; color: #c9d9ed; }
-.assistant-section li { margin-bottom: 6px; }
-.assistant-evidence { margin: 16px 0; }
-.assistant-evidence summary { cursor: pointer; color: var(--accent); }
-.assistant-evidence ul { list-style: none; padding: 0; }
-.assistant-evidence li { padding: 10px 0; border-bottom: 1px solid var(--line); }
-.assistant-evidence span, .assistant-evidence small { display: block; color: var(--muted); font-size: 12px; margin-top: 3px; }
-.assistant-evidence .reading-warning { color: var(--yellow); }
-.assistant-actions { margin: 14px 0 8px; }
-.assistant-pending { display: flex; align-items: center; gap: 8px; color: var(--muted); padding: 16px 0; }
-.assistant-error { color: var(--yellow); padding: 12px 0; }
-.assistant-composer { border-top: 1px solid var(--line); padding-top: 16px; }
-.assistant-composer label { display: block; color: var(--muted); margin-bottom: 6px; }
-.assistant-composer > div { display: flex; align-items: stretch; gap: 8px; }
-.assistant-composer textarea { min-height: 80px; resize: vertical; margin: 0; flex: 1; min-width: 0; }
-.assistant-composer button { flex: 0 0 44px; justify-content: center; }
-.assistant-composer > span { display: block; color: var(--muted); font-size: 12px; margin-top: 8px; }
 .health-node {
   position: absolute;
   z-index: 5;

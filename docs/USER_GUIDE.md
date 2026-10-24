@@ -24,14 +24,6 @@ Submit mood, fatigue, stress, sleep quality, symptom severity, and notes. Manual
 
 Alerts can be acknowledged, moved to investigation, marked false positive, resolved with required notes, or linked to follow-up actions. Completing a follow-up does not automatically resolve an alert.
 
-## AI Health Assistant
-
-The assistant screen generates a local structured fallback explanation. It is not a diagnosis and does not send data externally.
-
-The chat panel answers supported questions about stored metrics, personal baseline comparisons, recorded changes, alerts, quality, and pending follow-ups. It is a rule-based local assistant, not a connected language model. Suggested questions are available when starting a conversation. Supporting readings include their record IDs, sources, times, and quality; navigation buttons open the relevant screen without changing records.
-
-Metric follow-ups such as "What about its baseline?" reuse the previous metric. Unsupported questions are reported explicitly. Replies are snapshots of the database when the question was submitted. The assistant does not run investigations, recalculate baselines, or resolve alerts. Questions and conversation replies remain in the current app session and are not saved as chat history or sent externally; refreshing the page clears them.
-
 ## Data And Simulation Lab
 
 Generate reproducible scenarios, reset demo data with confirmation, export measurements, alerts, and follow-ups as CSV, or paste CSV in the documented template format to import measurements with validation.
