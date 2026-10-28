@@ -374,6 +374,33 @@ textarea { width: 100%; min-height: 150px; margin-bottom: 10px; }
 .reading-chart-tooltip p { margin: 6px 0 0; color: var(--muted); font-size: 12px; }
 .record-pagination { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 12px 0; }
 .record-pagination span { color: var(--muted); font-size: 12px; text-align: center; }
+.mission-replay { min-width: 0; }
+.replay-heading { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+.replay-heading span, .replay-clock span, .replay-clock small, .replay-endpoints, .replay-chart-header span { color: var(--muted); font-size: 12px; }
+.replay-clock { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 18px 0; display: grid; gap: 6px; }
+.replay-clock strong { font-size: 24px; overflow-wrap: anywhere; }
+.replay-controls { display: flex; align-items: end; flex-wrap: wrap; gap: 8px; padding: 18px 0; }
+.replay-controls label, .replay-chart-header label { display: grid; gap: 5px; color: var(--muted); font-size: 12px; min-width: 0; }
+.replay-controls select, .replay-chart-header select { max-width: 100%; min-width: 0; }
+.replay-scrubber { display: grid; gap: 8px; color: var(--muted); font-size: 12px; }
+.replay-scrubber input { width: 100%; padding: 0; accent-color: var(--accent); }
+.replay-endpoints { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin: 8px 0 20px; }
+.replay-chart-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin: 18px 0; }
+.replay-chart-header h3 { margin: 0; font-size: 18px; }
+.replay-analysis { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--line); }
+.replay-analysis section { min-width: 0; overflow-wrap: anywhere; }
+.replay-analysis h3 { font-size: 16px; }
+.replay-readings { margin: 0; }
+.replay-readings > div { padding: 10px 0; border-bottom: 1px solid var(--line); }
+.replay-readings dt { color: var(--muted); font-size: 12px; }
+.replay-readings dd { margin: 4px 0; font-size: 18px; }
+.replay-readings small { display: block; }
+.replay-snapshot { min-height: 650px; }
+@media (max-width: 720px) {
+  .replay-analysis { grid-template-columns: 1fr; }
+  .replay-controls label:last-child { flex-basis: 100%; }
+  .replay-clock strong { font-size: 20px; }
+}
 @media (max-width: 720px) {
   .graph-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .graph-controls > button { width: fit-content; }

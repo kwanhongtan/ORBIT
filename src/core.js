@@ -196,6 +196,10 @@ function quantile(sorted, q) {
 }
 
 export function runInvestigation(state, crewId = "crew-aurora", asOf = null) {
+  if (asOf !== null) {
+    asOf = new Date(asOf);
+    if (!Number.isFinite(asOf.getTime())) throw Object.assign(new Error("Investigation time must be a valid timestamp"), { status: 400 });
+  }
   const latestMeasurementTime = state.measurements
     .filter((m) => m.crew_id === crewId && m.quality_status !== "invalid" && !m.quality_flags?.includes("future_timestamp"))
     .map((m) => new Date(m.measured_at))
@@ -262,6 +266,8 @@ export function runInvestigation(state, crewId = "crew-aurora", asOf = null) {
     missing_metrics: missingMetrics,
     insufficient_baselines: insufficientBaselines,
     observation_window_hours: 36,
+    as_of: asOf.toISOString(),
+    window_start: windowStart.toISOString(),
     created_at: nowIso()
   };
   state.investigations.unshift(investigation);

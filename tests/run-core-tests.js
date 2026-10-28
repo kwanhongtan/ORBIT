@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { assistantReply } from "../src/assistant.js";
+import { replayTimeline, replaySnapshot } from "../src/replay.js";
 import {
   initialState,
   generateScenario,
@@ -366,6 +367,70 @@ test("assistant limits medical questions to data review and lists pending tasks 
   const reply = assistantReply(state, { message: "What needs follow-up?" });
   assert.match(reply.answer, /1 pending/);
   assert.equal(reply.sections[0].items.length, 1);
+});
+
+test("replay timeline orders and deduplicates timestamps and handles empty missions", () => {
+  assert.deepEqual(replayTimeline(initialState()).timestamps, []);
+  const state = initialState();
+  generateScenario(state, { days: 12 });
+  state.measurements.reverse();
+  const timeline = replayTimeline(state);
+  assert.equal(timeline.timestamps.length, 12);
+  assert.equal(timeline.total_readings, state.measurements.length);
+  assert.deepEqual(timeline.timestamps, [...timeline.timestamps].sort());
+  assert.throws(() => replayTimeline(state, "other"), (err) => err.status === 404);
+});
+
+test("replay hides future readings and never changes live workflows or baselines", () => {
+  const state = initialState();
+  generateScenario(state, { scenario: "stable_baseline", days: 12, seed: 21 });
+  generateScenario(state, { scenario: "gradual_drift", days: 10, seed: 22 });
+  runInvestigation(state);
+  const before = JSON.stringify(state);
+  const at = "2026-10-10T08:00:00.000Z";
+  const snapshot = replaySnapshot(state, { at, metric: "heart_rate" });
+  assert.equal(snapshot.preview_only, true);
+  assert.equal(snapshot.as_of, at);
+  assert.equal(snapshot.visible_count, state.measurements.filter((row) => new Date(row.measured_at) <= new Date(at)).length);
+  assert.ok(snapshot.remaining_count > 0);
+  assert.ok(snapshot.trend.every((row) => new Date(row.measured_at) <= new Date(at)));
+  assert.ok(Object.values(snapshot.latest_readings).every((row) => new Date(row.measured_at) <= new Date(at)));
+  assert.ok(snapshot.baselines.every((row) => !row.period_end || new Date(row.period_end) <= new Date(snapshot.finding.window_start)));
+  assert.ok(snapshot.finding.evidence.every((e) => new Date(state.measurements.find((row) => row.measurement_id === e.measurement_id).measured_at) <= new Date(at)));
+  assert.equal(JSON.stringify(state), before);
+});
+
+test("replay detects historical isolated spikes and can rewind after a drift finding", () => {
+  const state = initialState();
+  generateScenario(state, { scenario: "stable_baseline", days: 12, seed: 31 });
+  generateScenario(state, { scenario: "isolated_unusual", days: 12, seed: 32 });
+  const spike = state.measurements.find((row) => row.scenario_id === "isolated_unusual" && row.metric_type === "heart_rate" && row.value > 90);
+  const snapshot = replaySnapshot(state, { at: spike.measured_at });
+  assert.equal(snapshot.finding.severity, "LOW");
+  assert.equal(snapshot.preview_alert_count, 0);
+  generateScenario(state, { scenario: "gradual_drift", days: 10, seed: 22 });
+  const times = replayTimeline(state).timestamps;
+  const drift = replaySnapshot(state, { at: times.at(-1) });
+  assert.ok(["MEDIUM", "HIGH"].includes(drift.finding.severity));
+  assert.equal(drift.preview_alert_count, 1);
+  const rewind = replaySnapshot(state, { at: times[0] });
+  assert.equal(rewind.preview_alert_count, 0);
+  assert.ok(rewind.finding.insufficient_baselines.length > 0);
+  assert.equal(state.alerts.length, 0);
+});
+
+test("replay uses mission time for freshness and validates requested time and metric", () => {
+  const state = initialState();
+  generateScenario(state, { days: 2 });
+  const at = replayTimeline(state).timestamps[0];
+  const snapshot = replaySnapshot(state, { at, metric: "blood_oxygen" });
+  assert.equal(snapshot.latest_readings.heart_rate.freshness, "current");
+  assert.ok(snapshot.trend.every((row) => row.metric_type === "blood_oxygen"));
+  for (const input of [{ at: "invalid" }, { at: "2099-01-01T00:00:00Z" }, { at, metric: "__proto__" }]) {
+    assert.throws(() => replaySnapshot(state, input), (err) => err.status === 400);
+  }
+  assert.throws(() => replaySnapshot(initialState(), { at }), (err) => err.status === 404);
+  assert.throws(() => runInvestigation(state, "crew-aurora", "invalid"), (err) => err.status === 400);
 });
 
 let passed = 0;

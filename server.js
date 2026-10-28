@@ -23,6 +23,7 @@ import {
   localAiExplanation
 } from "./src/core.js";
 import { assistantReply } from "./src/assistant.js";
+import { replayTimeline, replaySnapshot } from "./src/replay.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = process.env.ORBIT_DATA_DIR || path.join(__dirname, "data");
@@ -103,6 +104,8 @@ const server = http.createServer(safe(async (req, res) => {
     return send(res, 200, state.mission);
   }
   if (req.method === "GET" && url.pathname === "/api/crew") return send(res, 200, state.crew);
+  if (req.method === "GET" && url.pathname === "/api/replay/timeline") return send(res, 200, replayTimeline(state, url.searchParams.get("crew_id") || "crew-aurora"));
+  if (req.method === "GET" && url.pathname === "/api/replay/snapshot") return send(res, 200, replaySnapshot(state, { at: url.searchParams.get("at"), metric: url.searchParams.get("metric") || "heart_rate", crew_id: url.searchParams.get("crew_id") || "crew-aurora" }));
   if (req.method === "GET" && url.pathname.startsWith("/api/crew/")) return send(res, 200, state.crew.find((c) => c.crew_id === url.pathname.split("/").at(-1)) || {});
 
   if (req.method === "GET" && url.pathname === "/api/measurements") {

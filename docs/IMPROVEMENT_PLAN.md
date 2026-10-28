@@ -2,6 +2,14 @@
 
 Checkpoint before improvements: commit `373b2fb`, tag `before-improvements-2026-10-24`.
 
+## Mission Replay
+
+The existing version was pushed with checkpoint tag `before-mission-replay-2026-10-28` before this stage.
+
+Implemented: a dedicated replay view with play/pause, stepping, restart, speed, time selection, progressive metric graphs, and investigation previews. Snapshots exclude future evidence and baseline data, evaluate freshness at mission time, and never mutate live workflows. Playback uses existing records and is local to the open replay session. It does not generate new telemetry or reconstruct previous user decisions.
+
+Next planned stage: CSV column mapping and unit normalisation while preserving original inputs.
+
 ## 1. Reading context
 
 Implemented and covered by reading-history and freshness regression tests.

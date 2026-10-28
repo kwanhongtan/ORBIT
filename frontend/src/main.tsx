@@ -14,6 +14,7 @@ import {
   ListChecks,
   Play,
   RefreshCw,
+  Rewind,
   ShieldCheck,
   Stethoscope,
   Trash2,
@@ -32,6 +33,7 @@ import {
   YAxis
 } from "recharts";
 import "./styles.css";
+import MissionReplay from "./MissionReplay";
 
 type Measurement = {
   measurement_id: string;
@@ -68,6 +70,7 @@ type Investigation = {
 const nav = [
   ["overview", "Mission Overview", HeartPulse],
   ["timeline", "Health Timeline", Activity],
+  ["replay", "Mission Replay", Rewind],
   ["investigator", "Drift Investigation", BarChart3],
   ["checkin", "Daily Check-in", ListChecks],
   ["alerts", "Action Centre", AlertTriangle],
@@ -186,6 +189,8 @@ function App() {
             <TimelineRail rows={measurements.slice(0, 18)} alerts={alerts.slice(0, 3)} />
           </Panel>
         </section>}
+
+        {active === "replay" && <MissionReplay metrics={metrics} revision={data} request={api} />}
 
         {active === "investigator" && <section className="grid two">
           <Panel title="Investigation Controls">

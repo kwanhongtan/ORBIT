@@ -12,6 +12,14 @@ Review trends, measurement records, source labels, and quality status.
 
 Select any health metric in **Health graphs** to review its full recorded history. Filter by local start/end dates, source, or quality and switch between line and bar graphs. Hover a plotted reading for its value, time, source, and quality flags. The records table follows the same filters and uses 50-record pages. Use the reset icon to clear filters. Metrics without matching data show an empty state.
 
+## Mission Replay
+
+Open **Mission Replay** to review the active crew's recorded mission in time order. The clock starts at the first recorded timestamp. Play/pause advances through recorded timestamps, and previous/next, restart, the progress slider, and the mission-time selector let you review specific points. Playback speeds range from 0.5x to 4x; 1x advances approximately one recorded timestamp per second after each snapshot loads.
+
+The graph and latest readings reveal only records at or before the selected mission time. Freshness is evaluated against that mission clock. Investigation previews use a baseline from before the selected observation window. Data after the selected time is excluded from both evidence and baseline calculations.
+
+Replay is a read-only, session-local preview. Preview findings and alert counts do not create, close, or change live alerts, follow-ups, investigations, or saved baselines. They are recalculated at each selected point, not a reconstruction of historical user decisions. Leaving the tab stops playback; refreshing data restarts replay from the first point. No new readings are generated during playback.
+
 ## Drift Investigation
 
 Recalculate baselines after generating stable data. Run the investigator after each scenario. Findings show the supporting measurements, baseline comparisons, severity, and quality limitations.
