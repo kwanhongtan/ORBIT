@@ -59,7 +59,7 @@ export default function MissionReplay({ metrics, revision, request }: { metrics:
   const domainStart = timeline?.start_at ? new Date(timeline.start_at).getTime() : 0;
   const domainEnd = timeline?.end_at ? new Date(timeline.end_at).getTime() : 0;
   return <section className="mission-replay">
-    <div className="replay-heading"><h2>Mission Replay</h2><span>Preview session · Live alerts and follow-ups unchanged</span></div>
+    <div className="replay-heading"><h2>Playback</h2><span>Preview session · Live alerts and follow-ups unchanged</span></div>
     {error && <div role="alert"><p className="reading-warning">{error}</p><button onClick={() => setRetry(retry + 1)}><RotateCcw size={16} /> Reload history</button></div>}
     {!timeline && !error && <p role="status">Loading mission history...</p>}
     {timeline && !timeline.timestamps.length && <p className="muted">No mission readings yet. Generate a scenario or import records in Data & Simulation Lab.</p>}

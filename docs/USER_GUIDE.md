@@ -6,6 +6,8 @@ Use this screen to see the fictional mission profile, current telemetry count, q
 
 Latest readings include timestamp, source, input quality, and freshness. These checks do not establish medical normality. The heart-rate and fingertip-oxygen dots show details on hover, keyboard focus, or tap. Whole-body and self-report metrics are listed separately.
 
+The overview groups latest readings into **Vitals**, **Wellbeing**, **Mission**, and **All metrics**. The top counters show overall record, quality, alert, and follow-up counts. On narrow screens, the navigation scrolls horizontally. Simulation duration and random seed are labelled in Data & Simulation Lab.
+
 ## Health Timeline
 
 Review trends, measurement records, source labels, and quality status.

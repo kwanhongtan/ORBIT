@@ -147,21 +147,24 @@ function App() {
   const metrics = data?.config?.metrics || {};
   const activeAlerts = alerts.filter((a) => !["RESOLVED", "FALSE_POSITIVE"].includes(a.status));
   const latestByMetric = data?.summary.latest_readings || {};
+  const pageTitle = nav.find(([id]) => id === active)?.[1] || "Mission Overview";
+  const navigate = (view: string) => { setActive(view); window.scrollTo({ top: 0, behavior: "auto" }); };
 
-  if (!data) return <main className="boot"><RefreshCw className="spin" /> Loading ORBIT...</main>;
+  if (!data) return <main className="boot">{message ? <div role="alert"><h1>Unable to load ORBIT</h1><p>{message}</p><button onClick={() => { setMessage(""); load().catch((err) => setMessage(err.message)); }}><RefreshCw size={16} /> Retry</button></div> : <><RefreshCw className="spin" /> Loading ORBIT...</>}</main>;
 
   return (
     <div className="shell">
-      <aside>
+      <aside className="sidebar">
         <div className="brand"><Stethoscope /><div><strong>ORBIT</strong><span>Health Console</span></div></div>
-        {nav.map(([id, label, Icon]) => <button key={id} className={active === id ? "active" : ""} onClick={() => setActive(id)}><Icon size={18} /> {label}</button>)}
+        <nav aria-label="Main navigation">{[{ label: "Monitoring", items: nav.slice(0, 4) }, { label: "Workspace", items: nav.slice(4) }].map((group) => <div className="nav-group" key={group.label}><p className="nav-group-label">{group.label}</p>{group.items.map(([id, label, Icon]) => <button aria-label={label} aria-current={active === id ? "page" : undefined} key={id} className={active === id ? "active" : ""} onClick={() => navigate(id)}><Icon size={17} /><span className="nav-label">{label}</span>{id === "alerts" && activeAlerts.length > 0 && <span className="nav-count">{activeAlerts.length}</span>}</button>)}</div>)}</nav>
+        <div className="sidebar-footer"><span className="workspace-dot" /> Local workspace<span>{data.summary.mission.mission_id}</span></div>
       </aside>
       <main>
-        <header>
-          <div><p className="eyebrow">Observational Risk Baselines, Investigation & Tracking</p><h1>{data.summary.mission.mission_name}</h1></div>
-          <button onClick={() => action(load, "Refreshed")} disabled={busy}><RefreshCw size={16} /> Refresh</button>
+        <header className="page-header">
+          <div><p className="eyebrow">{data.summary.mission.mission_name}</p><h1>{pageTitle}</h1></div>
+          <div className="header-actions"><span className="workspace-label"><span className="workspace-dot" /> Local database</span><button aria-label="Refresh data" title="Refresh data" onClick={() => action(load, "Refreshed")} disabled={busy}><RefreshCw size={16} className={busy ? "spin" : ""} /></button></div>
         </header>
-        {message && <div className="toast">{message}</div>}
+        {message && <div className="toast" role="status">{message}</div>}
         {pendingDelete && <DeleteImportDialog batch={pendingDelete} onCancel={() => setPendingDelete(null)} onConfirm={() => {
           const batch = pendingDelete;
           setPendingDelete(null);
@@ -169,17 +172,17 @@ function App() {
         }} />}
 
         {active === "overview" && <section>
-          <MissionHero summary={data.summary} activeAlerts={activeAlerts} latest={latestByMetric} />
-          <LatestReadings latest={latestByMetric} metrics={metrics} />
           <div className="kpis compact">
-            <MetricCard label="Unified Records" value={data.summary.counts.measurements} hint={`${data.summary.counts.valid_measurements} validated readings`} icon={<Activity />} />
-            <MetricCard label="Quality Flags" value={data.summary.counts.quality_warnings} hint="Invalid, stale, duplicate, or uncertain" icon={<ShieldCheck />} />
-            <MetricCard label="Open Alerts" value={data.summary.counts.active_alerts} hint="Evidence-linked action centre" icon={<AlertTriangle />} tone={activeAlerts[0]?.severity} />
-            <MetricCard label="Follow-ups" value={data.summary.counts.open_followups} hint="Response loop tracking" icon={<ClipboardCheck />} />
+            <MetricCard label="Total readings" value={data.summary.counts.measurements.toLocaleString()} hint={`${data.summary.counts.valid_measurements.toLocaleString()} passed input checks`} icon={<Activity />} />
+            <MetricCard label="Quality warnings" value={data.summary.counts.quality_warnings} hint="Records requiring verification" icon={<ShieldCheck />} tone="LOW" />
+            <MetricCard label="Open alerts" value={data.summary.counts.active_alerts} hint="Awaiting team review" icon={<AlertTriangle />} tone={activeAlerts[0]?.severity} />
+            <MetricCard label="Pending follow-ups" value={data.summary.counts.open_followups} hint="Recorded response tasks" icon={<ClipboardCheck />} />
           </div>
+          <MissionHero summary={data.summary} activeAlerts={activeAlerts} latest={latestByMetric} onNavigate={navigate} />
+          <LatestReadings latest={latestByMetric} metrics={metrics} />
           <div className="grid two">
-            <Panel title="Mission-Ready Operation"><OfflineCard latest={data.summary.latest_measurement_at} /></Panel>
-            <Panel title="Latest Finding"><Finding finding={investigations[0]} /></Panel>
+            <Panel title="Workspace status"><OfflineCard latest={data.summary.latest_measurement_at} /></Panel>
+            <Panel title="Latest investigation"><Finding finding={investigations[0]} /></Panel>
           </div>
         </section>}
 
@@ -194,12 +197,12 @@ function App() {
 
         {active === "investigator" && <section className="grid two">
           <Panel title="Investigation Controls">
-            <p className="muted">Deterministic baseline-aware analysis. AI output never creates or closes alerts.</p>
+            <p className="muted">Personal baseline comparison · 36-hour observation window</p>
             <div className="toolbar">
               <button className="primary" onClick={() => action(() => api("/api/investigations/run", post()), "Investigation complete")}><BarChart3 size={16} /> Run Investigator</button>
               <button onClick={() => action(() => api("/api/baselines/recalculate", post()), "Baselines recalculated")}>Recalculate Baselines</button>
             </div>
-            <BaselineTable rows={data.baselines} />
+            <BaselineTable rows={data.baselines} metrics={metrics} />
           </Panel>
           <Panel title="Findings">{investigations.slice(0, 8).map((f) => <Finding key={f.investigation_id} finding={f} />)}</Panel>
         </section>}
@@ -235,13 +238,12 @@ function App() {
 
         {active === "reports" && <section>
           <Panel title="Simulation Lab">
-            <p className="muted">Use predictable scenarios to demonstrate normal baseline, health drift, measurement quality, and recovery.</p>
             <div className="scenario-grid">
-              {data.scenarios.map((s: any) => <button key={s.id} className={scenario === s.id ? "scenario active" : "scenario"} onClick={() => setScenario(s.id)}><strong>{s.name.replace("Scenario ", "")}</strong><span>{s.description}</span></button>)}
+              {data.scenarios.map((s: any, index: number) => <button key={s.id} aria-pressed={scenario === s.id} className={scenario === s.id ? "scenario active" : "scenario"} onClick={() => setScenario(s.id)}><small>Scenario {String.fromCharCode(65 + index)}</small><strong>{s.name.replace(/^Scenario [A-Z] - /, "")}</strong><span>{s.description}</span></button>)}
             </div>
-            <div className="toolbar">
-              <input type="number" value={days} min={2} max={30} onChange={(e) => setDays(Number(e.target.value))} />
-              <input type="number" value={seed} onChange={(e) => setSeed(Number(e.target.value))} />
+            <div className="toolbar simulation-controls">
+              <label>Duration (days)<input type="number" aria-label="Simulation duration in days" value={days} min={2} max={30} onChange={(e) => setDays(Number(e.target.value))} /></label>
+              <label>Random seed<input type="number" aria-label="Simulation random seed" value={seed} onChange={(e) => setSeed(Number(e.target.value))} /></label>
               <button className="primary" onClick={() => action(() => api("/api/simulator/generate", post({ scenario, days, seed })), "Sample data generated")}><Play size={16} /> Generate</button>
               <button onClick={() => confirm("Clear generated demo data and incident workflow records?") && action(() => api("/api/simulator/reset", post()), "Demo data cleared")}>Reset Demo</button>
             </div>
@@ -293,21 +295,21 @@ function App() {
 }
 
 function MetricCard({ label, value, hint, icon, tone }: any) {
-  return <div className={`metric-card ${tone || ""}`}>{icon}<p>{label}</p><strong>{value}</strong><span>{hint}</span></div>;
+  return <div className={`metric-card ${tone || ""}`}><div className="metric-card-label"><p>{label}</p>{icon}</div><strong>{value}</strong><span>{hint}</span></div>;
 }
 
-function MissionHero({ summary, activeAlerts, latest }: any) {
-  const status = activeAlerts.length ? `${activeAlerts[0].severity} review` : "Nominal monitoring";
+function MissionHero({ summary, activeAlerts, latest, onNavigate }: any) {
+  const status = activeAlerts.length ? `${activeAlerts[0].severity} priority review` : "No open alerts";
   return <div className="mission-hero">
     <div className="hero-copy">
-      <span className="tag">Software-only prototype · Local-first</span>
-      <h2>Crew health overview</h2>
-      <p>{summary.crew.name}</p>
+      <span className="tag">Fictional crew profile</span>
+      <h2>{summary.crew.name}</h2>
+      <p>{summary.crew.role}</p>
       <div className="hero-stats">
-        <span><b>{status}</b>Current status</span>
-        <span><b>{summary.crew.name}</b>Fictional crew profile</span>
-        <span><b>{summary.latest_measurement_at ? new Date(summary.latest_measurement_at).toLocaleDateString() : "No data"}</b>Latest telemetry</span>
+        <span><small>Review status</small><b className={activeAlerts[0]?.severity}>{status}</b></span>
+        <span><small>Latest recorded reading</small><b>{summary.latest_measurement_at ? new Date(summary.latest_measurement_at).toLocaleString() : "No data"}</b></span>
       </div>
+      <div className="toolbar overview-actions"><button onClick={() => onNavigate("timeline")}><Activity size={16} /> Health timeline</button><button onClick={() => onNavigate("replay")}><Rewind size={16} /> Open replay</button></div>
     </div>
     <BodyModel latest={latest} />
   </div>;
@@ -344,15 +346,18 @@ function ReadingMeta({ reading }: { reading?: Measurement }) {
 }
 
 function LatestReadings({ latest, metrics }: any) {
+  const [category, setCategory] = useState("vitals");
+  const categories = [{ id: "vitals", label: "Vitals", keys: ["heart_rate", "blood_oxygen", "body_temperature", "systolic_bp", "diastolic_bp"] }, { id: "wellbeing", label: "Wellbeing", keys: ["sleep_duration", "sleep_quality", "fatigue", "activity_level", "exercise_duration", "hydration", "stress", "mood", "symptom_severity"] }, { id: "mission", label: "Mission", keys: ["radiation_dose", "bone_assessment"] }, { id: "all", label: "All metrics", keys: Object.keys(metrics) }];
+  const selected = categories.find((item) => item.id === category)!;
   return <section className="latest-readings" aria-label="Latest health readings">
-    <h2>Latest readings</h2>
-    <div className="reading-grid">{Object.entries(metrics).map(([metric, config]: [string, any]) => {
+    <div className="section-heading"><h2>Latest readings</h2><div className="metric-tabs" role="group" aria-label="Metric category">{categories.map((item) => <button key={item.id} aria-pressed={category === item.id} className={category === item.id ? "selected" : ""} onClick={() => setCategory(item.id)}>{item.label}</button>)}</div></div>
+    <div className="reading-grid">{Object.entries(metrics).filter(([key]) => selected.keys.includes(key)).map(([metric, config]: [string, any]) => {
       const reading = latest[metric];
       const context = ["stress", "fatigue", "mood", "hydration", "symptom_severity", "activity_level"].includes(metric) ? "Whole-body / self-report" : metric === "radiation_dose" || metric === "bone_assessment" ? "Prototype placeholder" : null;
       const unit = ({ percent: "%", c: "°C", hours: "h", minutes: "min", score_1_10: "/10", score_0_10: "/10", score_1_5: "/5" } as Record<string, string>)[config.unit] || config.unit;
       return <article className="reading-item" key={metric}>
         <h3>{config.label}</h3>
-        <p className="reading-value">{reading?.value ?? "--"} <small>{unit}</small></p>
+        <p className="reading-value">{reading ? new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(reading.value) : "--"} <small>{unit}</small></p>
         {context && <span className="reading-context">{context}</span>}
         <ReadingMeta reading={reading} />
       </article>;
@@ -494,12 +499,12 @@ function FollowUp({ follow, action }: any) {
   return <div className="incident"><strong>{follow.description}</strong><p>{follow.assigned_to} · <span className="pill">{follow.status}</span></p>{follow.status !== "COMPLETED" && <button onClick={() => action(() => api(`/api/follow-ups/${follow.action_id}`, { ...post({ status: "COMPLETED", completion_notes: "Completed in demonstration workflow." }), method: "PATCH" }), "Follow-up completed; alert still needs review")}>Complete</button>}</div>;
 }
 
-function BaselineTable({ rows }: any) {
-  return <div className="table-wrap"><table><thead><tr><th>Metric</th><th>Mean</th><th>Samples</th><th>Status</th></tr></thead><tbody>{rows.filter((b: any) => b.sample_count).map((b: any) => <tr key={b.baseline_id}><td>{b.metric_type}</td><td>{format(b.mean)}</td><td>{b.sample_count}</td><td>{b.sufficient ? "Established" : "Insufficient"}</td></tr>)}</tbody></table></div>;
+function BaselineTable({ rows, metrics = {} }: any) {
+  return <div className="table-wrap"><table><thead><tr><th>Metric</th><th>Mean</th><th>Samples</th><th>Status</th></tr></thead><tbody>{rows.filter((b: any) => b.sample_count).map((b: any) => <tr key={b.baseline_id}><td>{metrics[b.metric_type]?.label || b.metric_type.replaceAll("_", " ")}</td><td>{format(b.mean)}</td><td>{b.sample_count}</td><td><span className={`status-label ${b.sufficient ? "valid" : "questionable"}`}>{b.sufficient ? "Established" : "Insufficient"}</span></td></tr>)}</tbody></table></div>;
 }
 
 function MeasurementTable({ rows }: { rows: Measurement[] }) {
-  return <Panel title="Measurement Records"><div className="table-wrap"><table><thead><tr><th>Metric</th><th>Value</th><th>Time</th><th>Source</th><th>Quality</th></tr></thead><tbody>{rows.map((m) => <tr key={m.measurement_id}><td>{m.metric_type}</td><td>{m.value} {m.unit}</td><td>{new Date(m.measured_at).toLocaleString()}</td><td>{m.source}</td><td>{m.quality_status} {m.quality_flags?.join(", ")}</td></tr>)}</tbody></table></div></Panel>;
+  return <Panel title="Measurement Records"><div className="table-wrap"><table><thead><tr><th>Metric</th><th>Value</th><th>Time</th><th>Source</th><th>Quality</th></tr></thead><tbody>{rows.map((m) => <tr key={m.measurement_id}><td className="metric-name">{m.metric_type.replaceAll("_", " ")}</td><td>{m.value} {displayUnit(m.unit)}</td><td>{new Date(m.measured_at).toLocaleString()}</td><td>{m.source.replaceAll("_", " ")}</td><td><span className={`status-label ${m.quality_status}`}>{m.quality_status}</span><small className="record-flags">{m.quality_flags?.map((flag) => flag.replaceAll("_", " ")).join(", ")}</small></td></tr>)}</tbody></table></div></Panel>;
 }
 
 function format(value: number) {
