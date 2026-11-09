@@ -44,8 +44,14 @@ function loadState() {
   }
 }
 
-function saveState() {
-  fs.writeFileSync(DB_PATH, JSON.stringify(state, null, 2));
+function saveState(next = state) {
+  const temporary = `${DB_PATH}.${randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(temporary, JSON.stringify(next, null, 2));
+    fs.renameSync(temporary, DB_PATH);
+  } finally {
+    fs.rmSync(temporary, { force: true });
+  }
 }
 
 function send(res, status, body, headers = {}) {
@@ -53,7 +59,7 @@ function send(res, status, body, headers = {}) {
   res.writeHead(status, {
     "Content-Type": typeof body === "string" ? "text/plain; charset=utf-8" : "application/json; charset=utf-8",
     "Access-Control-Allow-Origin": "http://localhost:4173",
-    "Access-Control-Allow-Methods": "GET,POST,PATCH,OPTIONS",
+    "Access-Control-Allow-Methods": "GET,POST,PATCH,DELETE,OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type,X-Import-Filename",
     ...headers
   });
@@ -68,11 +74,15 @@ async function body(req) {
     if (size > 1024 * 1024) throw Object.assign(new Error("Request exceeds 1 MB limit"), { status: 413 });
     chunks.push(chunk);
   }
-  const text = Buffer.concat(chunks).toString("utf8");
+  const text = Buffer.concat(chunks, size).toString("utf8");
   if (!text) return {};
   const type = req.headers["content-type"] || "";
   if (type.includes("text/csv")) return text;
-  return JSON.parse(text);
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw Object.assign(new Error("Invalid JSON request"), { status: 400 });
+  }
 }
 
 function notFound(res) {
@@ -80,18 +90,20 @@ function notFound(res) {
 }
 
 function safe(handler) {
-  return async (req, res, url) => {
+  return async (req, res) => {
     try {
+      const url = new URL(req.url, `http://${req.headers.host}`);
       await handler(req, res, url);
-      if (req.method !== "GET") saveState();
+      if (req.method !== "GET" && req.method !== "OPTIONS" && req.method !== "DELETE" &&
+          url.pathname !== "/api/crew") saveState();
     } catch (err) {
-      send(res, err.status || 500, { error: err.message || "Unexpected error" });
+      if (res.headersSent) res.destroy();
+      else send(res, err.status || 500, { error: err.message || "Unexpected error" });
     }
   };
 }
 
-const server = http.createServer(safe(async (req, res) => {
-  const url = new URL(req.url, `http://${req.headers.host}`);
+const server = http.createServer(safe(async (req, res, url) => {
   if (req.method === "OPTIONS") return send(res, 204, "");
 
   if (!url.pathname.startsWith("/api/")) {
@@ -105,21 +117,36 @@ const server = http.createServer(safe(async (req, res) => {
     state.mission = { ...state.mission, ...(await body(req)), updated_at: new Date().toISOString() };
     return send(res, 200, state.mission);
   }
-  if (req.method === "GET" && url.pathname === "/api/crew") return send(res, 200, state.crew);
+  const activeCrew = state.crew.filter((row) => !row.deleted_at);
+  if (req.method === "GET" && url.pathname === "/api/crew") return send(res, 200, activeCrew);
   if (req.method === "POST" && url.pathname === "/api/crew") {
     const input = await body(req);
     const name = typeof input?.name === "string" ? input.name.trim() : "";
     const role = typeof input?.role === "string" ? input.role.trim() : "";
     if (!name || name.length > 80 || role.length > 80) return send(res, 400, { error: "Enter a crew name and an optional role (up to 80 characters each)." });
     const member = { crew_id: `crew-${randomUUID()}`, name, role: role || "Crew member", fictional: true };
-    state.crew.push(member);
+    const next = { ...state, crew: [...state.crew, member] };
+    saveState(next);
+    state = next;
     return send(res, 201, member);
   }
-  if (req.method === "GET" && url.pathname.startsWith("/api/crew/")) return send(res, 200, state.crew.find((c) => c.crew_id === url.pathname.split("/").at(-1)) || {});
+  const crewRoute = url.pathname.match(/^\/api\/crew\/([^/]+)$/);
+  if (crewRoute) {
+    const profile = activeCrew.find((row) => row.crew_id === crewRoute[1]);
+    if (req.method === "GET") return profile ? send(res, 200, profile) : notFound(res);
+    if (req.method === "DELETE") {
+      if (!profile) return notFound(res);
+      if (activeCrew.length === 1) return send(res, 409, { error: "Keep at least one active crew profile." });
+      const next = { ...state, crew: state.crew.map((row) => row === profile ? { ...row, deleted_at: new Date().toISOString() } : row) };
+      saveState(next);
+      state = next;
+      return send(res, 200, next.crew.filter((row) => !row.deleted_at));
+    }
+  }
 
   const requestedCrew = url.searchParams.get("crew_id");
-  const crewId = requestedCrew ?? state.crew[0]?.crew_id;
-  const member = state.crew.find((row) => row.crew_id === crewId);
+  const crewId = requestedCrew ?? activeCrew[0]?.crew_id;
+  const member = activeCrew.find((row) => row.crew_id === crewId);
   if (!member) return send(res, 404, { error: "Crew member not found" });
   const owned = (row) => row.crew_id === crewId;
   const ownsAlert = (id) => state.alerts.some((row) => row.alert_id === id && owned(row));
@@ -139,7 +166,7 @@ const server = http.createServer(safe(async (req, res) => {
   if (req.method === "POST" && url.pathname === "/api/measurements") {
     const input = await body(req);
     const target = input.crew_id ?? crewId;
-    if ((requestedCrew !== null && target !== crewId) || !state.crew.some((row) => row.crew_id === target)) return send(res, 400, { error: "Measurement crew ID must match a registered crew member and the selected profile." });
+    if ((requestedCrew !== null && target !== crewId) || !state.crew.some((row) => row.crew_id === target && !row.deleted_at)) return send(res, 400, { error: "Measurement crew ID must match an active crew member and the selected profile." });
     const measurement = createMeasurement({ ...input, crew_id: target }, state);
     state.measurements.push(measurement);
     return send(res, 201, measurement);
@@ -166,7 +193,7 @@ const server = http.createServer(safe(async (req, res) => {
   if (req.method === "POST" && url.pathname === "/api/simulator/generate") {
     const input = await body(req);
     const target = input.crew_id ?? crewId;
-    if ((requestedCrew !== null && target !== crewId) || !state.crew.some((row) => row.crew_id === target)) return send(res, 400, { error: "Simulation crew ID must match a registered crew member and the selected profile." });
+    if ((requestedCrew !== null && target !== crewId) || !state.crew.some((row) => row.crew_id === target && !row.deleted_at)) return send(res, 400, { error: "Simulation crew ID must match an active crew member and the selected profile." });
     return send(res, 200, generateScenario(state, { ...input, crew_id: target }));
   }
   const simulatorAction = url.pathname.match(/^\/api\/simulator\/(start|pause|resume)$/);

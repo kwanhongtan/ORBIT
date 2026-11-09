@@ -503,16 +503,20 @@ h3 { font-size: 15px; font-weight: 600; }
 .sidebar-footer > span:last-child { display: block; margin: 7px 0 0 13px; color: #748587; font-size: 11px; }
 .workspace-dot { display: inline-block; width: 6px; height: 6px; background: var(--green); border-radius: 50%; margin-right: 7px; vertical-align: middle; }
 main { padding: 28px 36px 48px; max-width: 1680px; margin: 0 auto; }
-.page-header { flex-direction: row; align-items: center; padding-bottom: 24px; margin-bottom: 24px; border-bottom: 1px solid var(--line); }
+.page-header { flex-flow: row wrap; align-items: center; gap: 16px; padding-bottom: 24px; margin-bottom: 24px; border-bottom: 1px solid var(--line); }
 .page-header > div:first-child { min-width: 0; }
 .eyebrow { font-size: 12px; margin-bottom: 8px; }
-.header-actions { display: flex; align-items: center; gap: 16px; flex-shrink: 0; }
+.header-actions { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; min-width: 0; max-width: 100%; }
 .workspace-label { color: var(--muted); font-size: 12px; }
 .header-actions > button { width: 38px; padding: 0; }
-.header-actions > .add-crew { width: auto; padding: 0 12px; white-space: nowrap; }
-.crew-select { min-width: 0; }
-.crew-select select { width: min(225px, 100%); text-overflow: ellipsis; }
-.crew-form { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
+.header-actions > .crew-action { width: auto; padding: 0 12px; white-space: nowrap; }
+.crew-select { display: grid; gap: 4px; min-width: 0; width: min(225px, 100%); }
+.crew-select select { width: 100%; text-overflow: ellipsis; }
+.crew-editor { margin-bottom: 20px; }
+.crew-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 12px; }
+.crew-form label { display: grid; gap: 6px; min-width: 0; }
+.crew-form input { width: 100%; }
+.hero-copy h2 { overflow-wrap: anywhere; }
 .kpis { gap: 12px; margin-bottom: 26px; grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .kpis.compact { margin-top: 0; }
 .metric-card { min-width: 0; border-radius: 6px; padding: 16px; }
@@ -659,7 +663,8 @@ tbody tr:last-child td { border-bottom: 0; }
   h1 { font-size: 24px; }
   .page-header { flex-wrap: wrap; align-items: flex-start; gap: 10px; }
   .workspace-label { display: none; }
-  .header-actions { gap: 8px; padding-top: 5px; flex-shrink: 1; align-items: end; }
+  .header-actions { width: 100%; padding-top: 5px; }
+  .crew-select { width: 100%; }
   .eyebrow { font-size: 11px; }
   .mission-hero { grid-template-columns: 1fr; gap: 18px; }
   .hero-copy h2 { font-size: 22px; }

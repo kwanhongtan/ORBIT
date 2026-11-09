@@ -542,7 +542,7 @@ export function importMeasurements(state, text, { commit = false, currentTime = 
   let duplicates = 0;
   for (const [index, row] of records.entries()) {
     try {
-      if (!state.crew.some((member) => member.crew_id === row.crew_id)) throw new Error("Unknown crew_id");
+      if (!state.crew.some((member) => member.crew_id === row.crew_id && !member.deleted_at)) throw new Error("Unknown crew_id");
       if (crewId && row.crew_id !== crewId) throw new Error(`Row must use the selected crew ID: ${crewId}`);
       const measurement = createMeasurement({ ...row, source: row.source || "csv_import" }, workingState, currentTime);
       if (measurement.quality_flags.includes("duplicate")) {

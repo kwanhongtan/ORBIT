@@ -116,16 +116,20 @@ function App() {
   return <CrewWorkspace key={selected} member={member} crew={crew} active={active} setActive={setActive} selectCrew={setSelected} addCrew={(profile) => {
     setCrew((current) => [...current, profile]);
     setSelected(profile.crew_id);
+  }} removeCrew={(profiles) => {
+    setCrew(profiles);
+    setSelected(profiles[0].crew_id);
   }} />;
 }
 
-function CrewWorkspace({ member, crew, active, setActive, selectCrew, addCrew }: {
+function CrewWorkspace({ member, crew, active, setActive, selectCrew, addCrew, removeCrew }: {
   member: CrewMember;
   crew: CrewMember[];
   active: string;
   setActive: (view: string) => void;
   selectCrew: (id: string) => void;
   addCrew: (profile: CrewMember) => void;
+  removeCrew: (profiles: CrewMember[]) => void;
 }) {
   const scopedPath = useMemo(() => (path: string) =>
     `${path}${path.includes("?") ? "&" : "?"}${new URLSearchParams({ crew_id: member.crew_id })}`, [member.crew_id]);
@@ -135,6 +139,8 @@ function CrewWorkspace({ member, crew, active, setActive, selectCrew, addCrew }:
   const [busy, setBusy] = useState(false);
   const [addingCrew, setAddingCrew] = useState(false);
   const [savingCrew, setSavingCrew] = useState(false);
+  const [deletingCrew, setDeletingCrew] = useState(false);
+  const [crewError, setCrewError] = useState("");
   const [message, setMessage] = useState("");
   const [scenario, setScenario] = useState("stable_baseline");
   const [days, setDays] = useState(12);
@@ -211,29 +217,55 @@ function CrewWorkspace({ member, crew, active, setActive, selectCrew, addCrew }:
             <label className="crew-select">Crew member<select value={member.crew_id} disabled={busy || savingCrew} onChange={(event) => selectCrew(event.target.value)}>
               {crew.map((profile) => <option key={profile.crew_id} value={profile.crew_id}>{profile.name}</option>)}
             </select></label>
-            <button className="add-crew" aria-expanded={addingCrew} onClick={() => setAddingCrew(!addingCrew)} disabled={busy || savingCrew}>Add crew</button>
-            <button aria-label="Refresh data" title="Refresh data" onClick={() => action(async () => {}, "Refreshed")} disabled={busy}><RefreshCw size={16} className={busy ? "spin" : ""} /></button>
+            <button className="crew-action" aria-expanded={addingCrew} onClick={() => { setCrewError(""); setAddingCrew(!addingCrew); }} disabled={busy || savingCrew}>Add crew</button>
+            <button className="crew-action" onClick={() => { setCrewError(""); setDeletingCrew(true); }} disabled={busy || savingCrew || crew.length < 2}
+              title={crew.length < 2 ? "Keep at least one active crew profile" : `Delete ${member.name}`}>Delete crew</button>
+            <button aria-label="Refresh data" title="Refresh data" onClick={() => action(async () => {}, "Refreshed")} disabled={busy || savingCrew}><RefreshCw size={16} className={busy ? "spin" : ""} /></button>
           </div>
         </header>
-        {addingCrew && <Panel title="New crew profile">
-          <form className="crew-form" onSubmit={async (event) => {
+        {addingCrew && <section className="panel crew-editor" aria-label="New crew profile">
+          <h2>New crew profile</h2>
+          <form onSubmit={async (event) => {
             event.preventDefault();
+            if (savingCrew) return;
             const fields = new FormData(event.currentTarget);
+            setCrewError("");
             setSavingCrew(true);
             try {
               addCrew(await request("/api/crew", post({ name: fields.get("name"), role: fields.get("role") })));
             } catch (err: any) {
-              setMessage(err.message);
+              setCrewError(err.message);
             } finally {
               setSavingCrew(false);
             }
           }}>
-            <label>Name<input name="name" required maxLength={80} /></label>
-            <label>Mission role (optional)<input name="role" maxLength={80} /></label>
-            <button className="primary" disabled={savingCrew}>Create profile</button>
+            <div className="crew-form">
+              <label>Name<input name="name" required maxLength={80} /></label>
+              <label>Mission role (optional)<input name="role" maxLength={80} /></label>
+            </div>
+            {crewError && !deletingCrew && <p role="alert">{crewError}</p>}
+            <div className="toolbar">
+              <button className="primary" disabled={savingCrew}>Create profile</button>
+              <button type="button" disabled={savingCrew} onClick={() => setAddingCrew(false)}>Cancel</button>
+            </div>
           </form>
           <p className="muted">New profiles start with an empty health record.</p>
-        </Panel>}
+        </section>}
+        {deletingCrew && <DeleteCrewDialog name={member.name} busy={savingCrew} error={crewError} onCancel={() => {
+          setDeletingCrew(false);
+          setCrewError("");
+        }} onConfirm={async () => {
+          if (savingCrew) return;
+          setSavingCrew(true);
+          setCrewError("");
+          try {
+            removeCrew(await request(`/api/crew/${encodeURIComponent(member.crew_id)}`, { method: "DELETE" }));
+          } catch (err: any) {
+            setCrewError(err.message);
+          } finally {
+            setSavingCrew(false);
+          }
+        }} />}
         {message && <div className="toast" role="status">{message}</div>}
         {pendingDelete && <DeleteImportDialog batch={pendingDelete} onCancel={() => setPendingDelete(null)} onConfirm={() => {
           const batch = pendingDelete;
@@ -490,6 +522,29 @@ function LatestReadings({ latest, metrics }: any) {
 
 function Panel({ title, children }: any) {
   return <div className="panel"><h2>{title}</h2>{children}</div>;
+}
+
+function DeleteCrewDialog({ name, busy, error, onCancel, onConfirm }: {
+  name: string;
+  busy: boolean;
+  error: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => { dialog.current?.showModal(); }, []);
+  return <dialog ref={dialog} className="delete-dialog" aria-labelledby="delete-crew-title" onCancel={(event) => {
+    event.preventDefault();
+    if (!busy) onCancel();
+  }}>
+    <h2 id="delete-crew-title">Delete crew profile?</h2>
+    <p><strong>{name}</strong> will be removed from the crew selector. Their records will be archived locally.</p>
+    {error && <p role="alert">{error}</p>}
+    <div className="toolbar">
+      <button autoFocus disabled={busy} onClick={onCancel}>Cancel</button>
+      <button className="danger-button" disabled={busy} onClick={onConfirm}><Trash2 size={16} /> Delete crew</button>
+    </div>
+  </dialog>;
 }
 
 function DeleteImportDialog({ batch, onCancel, onConfirm }: any) {
