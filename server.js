@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import http from "node:http";
+import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import {
   SCENARIOS,
@@ -8,6 +9,7 @@ import {
   initialState,
   createMeasurement,
   generateScenario,
+  updateSimulator,
   calculateBaselines,
   runInvestigation,
   transitionAlert,
@@ -104,66 +106,124 @@ const server = http.createServer(safe(async (req, res) => {
     return send(res, 200, state.mission);
   }
   if (req.method === "GET" && url.pathname === "/api/crew") return send(res, 200, state.crew);
-  if (req.method === "GET" && url.pathname === "/api/replay/timeline") return send(res, 200, replayTimeline(state, url.searchParams.get("crew_id") || "crew-aurora"));
-  if (req.method === "GET" && url.pathname === "/api/replay/snapshot") return send(res, 200, replaySnapshot(state, { at: url.searchParams.get("at"), metric: url.searchParams.get("metric") || "heart_rate", crew_id: url.searchParams.get("crew_id") || "crew-aurora" }));
+  if (req.method === "POST" && url.pathname === "/api/crew") {
+    const input = await body(req);
+    const name = typeof input?.name === "string" ? input.name.trim() : "";
+    const role = typeof input?.role === "string" ? input.role.trim() : "";
+    if (!name || name.length > 80 || role.length > 80) return send(res, 400, { error: "Enter a crew name and an optional role (up to 80 characters each)." });
+    const member = { crew_id: `crew-${randomUUID()}`, name, role: role || "Crew member", fictional: true };
+    state.crew.push(member);
+    return send(res, 201, member);
+  }
   if (req.method === "GET" && url.pathname.startsWith("/api/crew/")) return send(res, 200, state.crew.find((c) => c.crew_id === url.pathname.split("/").at(-1)) || {});
+
+  const requestedCrew = url.searchParams.get("crew_id");
+  const crewId = requestedCrew ?? state.crew[0]?.crew_id;
+  const member = state.crew.find((row) => row.crew_id === crewId);
+  if (!member) return send(res, 404, { error: "Crew member not found" });
+  const owned = (row) => row.crew_id === crewId;
+  const ownsAlert = (id) => state.alerts.some((row) => row.alert_id === id && owned(row));
+  const ownsFollowUp = (row) => ownsAlert(row.alert_id);
+
+  if (req.method === "GET" && url.pathname === "/api/replay/timeline") return send(res, 200, replayTimeline(state, crewId));
+  if (req.method === "GET" && url.pathname === "/api/replay/snapshot") return send(res, 200, replaySnapshot(state, { at: url.searchParams.get("at"), metric: url.searchParams.get("metric") || "heart_rate", crew_id: crewId }));
 
   if (req.method === "GET" && url.pathname === "/api/measurements") {
     const metric = url.searchParams.get("metric");
     const source = url.searchParams.get("source");
-    let rows = [...state.measurements].sort((a, b) => new Date(b.measured_at) - new Date(a.measured_at));
+    let rows = state.measurements.filter(owned).sort((a, b) => new Date(b.measured_at) - new Date(a.measured_at));
     if (metric) rows = rows.filter((m) => m.metric_type === metric);
     if (source) rows = rows.filter((m) => m.source === source);
     return send(res, 200, url.searchParams.get("limit") === "all" ? rows : rows.slice(0, Number(url.searchParams.get("limit") || 500)));
   }
   if (req.method === "POST" && url.pathname === "/api/measurements") {
-    const measurement = createMeasurement(await body(req), state);
+    const input = await body(req);
+    const target = input.crew_id ?? crewId;
+    if ((requestedCrew !== null && target !== crewId) || !state.crew.some((row) => row.crew_id === target)) return send(res, 400, { error: "Measurement crew ID must match a registered crew member and the selected profile." });
+    const measurement = createMeasurement({ ...input, crew_id: target }, state);
     state.measurements.push(measurement);
     return send(res, 201, measurement);
   }
-  if (req.method === "GET" && url.pathname.startsWith("/api/measurements/")) return send(res, 200, state.measurements.find((m) => m.measurement_id === url.pathname.split("/").at(-1)) || {});
+  if (req.method === "GET" && url.pathname.startsWith("/api/measurements/")) return send(res, 200, state.measurements.find((m) => owned(m) && m.measurement_id === url.pathname.split("/").at(-1)) || {});
   if (req.method === "POST" && url.pathname === "/api/measurements/import") {
     const filename = req.headers["x-import-filename"] ? decodeURIComponent(String(req.headers["x-import-filename"])) : "Pasted CSV";
-    return send(res, 200, importMeasurements(state, String(await body(req)), { commit: true, filename }));
+    return send(res, 200, importMeasurements(state, String(await body(req)), { commit: true, filename, crewId }));
   }
-  if (req.method === "POST" && url.pathname === "/api/measurements/import/preview") return send(res, 200, importMeasurements(state, String(await body(req))));
-  if (req.method === "GET" && url.pathname === "/api/imports") return send(res, 200, listImports(state));
+  if (req.method === "POST" && url.pathname === "/api/measurements/import/preview") return send(res, 200, importMeasurements(state, String(await body(req)), { crewId }));
+  if (req.method === "GET" && url.pathname === "/api/imports") return send(res, 200, listImports(state, crewId));
   const importAction = url.pathname.match(/^\/api\/imports\/([^/]+)\/(delete|restore)$/);
   if (req.method === "POST" && importAction) {
-    return send(res, 200, importAction[2] === "delete" ? deleteImport(state, importAction[1], await body(req)) : restoreImport(state, importAction[1]));
+    return send(res, 200, importAction[2] === "delete" ? deleteImport(state, importAction[1], await body(req), crewId) : restoreImport(state, importAction[1], crewId));
   }
 
-  if (req.method === "GET" && url.pathname === "/api/baselines") return send(res, 200, state.baselines.length ? state.baselines : calculateBaselines(state));
-  if (req.method === "POST" && url.pathname === "/api/baselines/recalculate") return send(res, 200, calculateBaselines(state));
+  if (req.method === "GET" && url.pathname === "/api/baselines") {
+    const baselines = state.baselines.filter(owned);
+    return send(res, 200, baselines.length ? baselines : calculateBaselines(state, crewId));
+  }
+  if (req.method === "POST" && url.pathname === "/api/baselines/recalculate") return send(res, 200, calculateBaselines(state, crewId));
 
   if (req.method === "GET" && url.pathname === "/api/simulator/scenarios") return send(res, 200, SCENARIOS);
-  if (req.method === "POST" && url.pathname === "/api/simulator/generate") return send(res, 200, generateScenario(state, await body(req)));
-  if (req.method === "POST" && url.pathname === "/api/simulator/start") { state.simulator.status = "running"; return send(res, 200, state.simulator); }
-  if (req.method === "POST" && url.pathname === "/api/simulator/pause") { state.simulator.status = "paused"; return send(res, 200, state.simulator); }
-  if (req.method === "POST" && url.pathname === "/api/simulator/resume") { state.simulator.status = "running"; return send(res, 200, state.simulator); }
-  if (req.method === "POST" && url.pathname === "/api/simulator/reset") return send(res, 200, clearDemoData(state));
+  if (req.method === "POST" && url.pathname === "/api/simulator/generate") {
+    const input = await body(req);
+    const target = input.crew_id ?? crewId;
+    if ((requestedCrew !== null && target !== crewId) || !state.crew.some((row) => row.crew_id === target)) return send(res, 400, { error: "Simulation crew ID must match a registered crew member and the selected profile." });
+    return send(res, 200, generateScenario(state, { ...input, crew_id: target }));
+  }
+  const simulatorAction = url.pathname.match(/^\/api\/simulator\/(start|pause|resume)$/);
+  if (req.method === "POST" && simulatorAction) return send(res, 200, updateSimulator(state, crewId, { status: simulatorAction[1] === "pause" ? "paused" : "running" }));
+  if (req.method === "POST" && url.pathname === "/api/simulator/reset") return send(res, 200, clearDemoData(state, crewId));
 
-  if (req.method === "POST" && url.pathname === "/api/investigations/run") return send(res, 201, runInvestigation(state));
-  if (req.method === "GET" && url.pathname === "/api/investigations") return send(res, 200, state.investigations);
-  if (req.method === "GET" && url.pathname.startsWith("/api/investigations/")) return send(res, 200, state.investigations.find((i) => i.investigation_id === url.pathname.split("/").at(-1)) || {});
+  if (req.method === "POST" && url.pathname === "/api/investigations/run") return send(res, 201, runInvestigation(state, crewId));
+  if (req.method === "GET" && url.pathname === "/api/investigations") return send(res, 200, state.investigations.filter(owned));
+  if (req.method === "GET" && url.pathname.startsWith("/api/investigations/")) return send(res, 200, state.investigations.find((i) => owned(i) && i.investigation_id === url.pathname.split("/").at(-1)) || {});
 
-  if (req.method === "GET" && url.pathname === "/api/alerts") return send(res, 200, state.alerts);
-  if (req.method === "GET" && url.pathname.startsWith("/api/alerts/") && url.pathname.split("/").length === 4) return send(res, 200, state.alerts.find((a) => a.alert_id === url.pathname.split("/").at(-1)) || {});
+  if (req.method === "GET" && url.pathname === "/api/alerts") return send(res, 200, state.alerts.filter(owned));
+  if (req.method === "GET" && url.pathname.startsWith("/api/alerts/") && url.pathname.split("/").length === 4) return send(res, 200, state.alerts.find((a) => owned(a) && a.alert_id === url.pathname.split("/").at(-1)) || {});
   const alertAction = url.pathname.match(/^\/api\/alerts\/([^/]+)\/(acknowledge|investigate|resolve|false-positive)$/);
-  if (req.method === "POST" && alertAction) return send(res, 200, transitionAlert(state, alertAction[1], alertAction[2], await body(req)));
+  if (req.method === "POST" && alertAction) {
+    const input = await body(req);
+    if (!ownsAlert(alertAction[1])) return notFound(res);
+    return send(res, 200, transitionAlert(state, alertAction[1], alertAction[2], input));
+  }
 
-  if (req.method === "GET" && url.pathname === "/api/follow-ups") return send(res, 200, state.followUps);
-  if (req.method === "POST" && url.pathname === "/api/follow-ups") return send(res, 201, createFollowUp(state, await body(req)));
-  if (req.method === "PATCH" && url.pathname.startsWith("/api/follow-ups/")) return send(res, 200, updateFollowUp(state, url.pathname.split("/").at(-1), await body(req)));
+  if (req.method === "GET" && url.pathname === "/api/follow-ups") return send(res, 200, state.followUps.filter(ownsFollowUp));
+  if (req.method === "POST" && url.pathname === "/api/follow-ups") {
+    const input = await body(req);
+    if (!ownsAlert(input.alert_id)) return notFound(res);
+    return send(res, 201, createFollowUp(state, input));
+  }
+  if (req.method === "PATCH" && url.pathname.startsWith("/api/follow-ups/")) {
+    const input = await body(req);
+    const id = url.pathname.split("/").at(-1);
+    if (!state.followUps.some((row) => row.action_id === id && ownsFollowUp(row))) return notFound(res);
+    return send(res, 200, updateFollowUp(state, id, input));
+  }
 
   if (req.method === "GET" && url.pathname === "/api/ai/status") return send(res, 200, { enabled: process.env.AI_ENABLED === "true", configured: Boolean(process.env.GEMINI_API_KEY), privacy: "Default local fallback sends no data externally." });
-  if (req.method === "POST" && url.pathname === "/api/ai/explain") return send(res, 201, localAiExplanation(state));
-  if (req.method === "POST" && url.pathname === "/api/ai/chat") return send(res, 200, assistantReply(state, await body(req)));
+  if (url.pathname.startsWith("/api/ai/") || url.pathname === "/api/reports/summary") {
+    const scoped = {
+      ...state,
+      crew: [member],
+      measurements: state.measurements.filter(owned),
+      alerts: state.alerts.filter(owned),
+      investigations: state.investigations.filter(owned),
+      followUps: state.followUps.filter(ownsFollowUp),
+      aiExplanations: state.aiExplanations.filter((row) => (row.crew_id ?? state.crew[0].crew_id) === crewId)
+    };
+    if (req.method === "GET" && url.pathname === "/api/reports/summary") return send(res, 200, summary(scoped));
+    if (req.method === "POST" && url.pathname === "/api/ai/explain") {
+      const explanation = { ...localAiExplanation(scoped), crew_id: crewId };
+      state.aiExplanations.unshift(explanation);
+      return send(res, 201, explanation);
+    }
+    if (req.method === "POST" && url.pathname === "/api/ai/chat") return send(res, 200, assistantReply(scoped, await body(req)));
+  }
 
-  if (req.method === "GET" && url.pathname === "/api/reports/summary") return send(res, 200, summary(state));
-  if (req.method === "GET" && url.pathname === "/api/reports/export/measurements") return send(res, 200, csv(state.measurements), { "Content-Type": "text/csv; charset=utf-8", "Content-Disposition": "attachment; filename=orbit-measurements.csv" });
-  if (req.method === "GET" && url.pathname === "/api/reports/export/alerts") return send(res, 200, csv(state.alerts), { "Content-Type": "text/csv; charset=utf-8", "Content-Disposition": "attachment; filename=orbit-alerts.csv" });
-  if (req.method === "GET" && url.pathname === "/api/reports/export/follow-ups") return send(res, 200, csv(state.followUps), { "Content-Type": "text/csv; charset=utf-8", "Content-Disposition": "attachment; filename=orbit-followups.csv" });
+  if (req.method === "GET" && url.pathname.startsWith("/api/reports/export/")) {
+    const report = url.pathname.split("/").at(-1);
+    const rows = { measurements: state.measurements.filter(owned), alerts: state.alerts.filter(owned), "follow-ups": state.followUps.filter(ownsFollowUp) };
+    if (Object.hasOwn(rows, report)) return send(res, 200, csv(rows[report]), { "Content-Type": "text/csv; charset=utf-8", "Content-Disposition": `attachment; filename=orbit-${report}-${crewId}.csv` });
+  }
 
   return notFound(res);
 }));

@@ -183,7 +183,7 @@ export function calculateBaselines(state, crewId = "crew-aurora", asOf = new Dat
       explanation: count >= minSamples ? `Calculated from ${count} valid measurements.` : `Baseline not established; ${count}/${minSamples} valid measurements available.`
     };
   });
-  state.baselines = baselines;
+  state.baselines = [...state.baselines.filter((item) => item.crew_id !== crewId), ...baselines];
   return baselines;
 }
 
@@ -393,7 +393,7 @@ export function generateScenario(state, { scenario = "stable_baseline", days = 7
   const scenarioInfo = SCENARIOS.find((s) => s.id === scenario);
   if (!scenarioInfo) throw Object.assign(new Error("unknown scenario"), { status: 400 });
   const batch = `${scenario}-${seed}-${days}`;
-  const existingBatch = state.measurements.some((m) => m.generated_batch_id === batch);
+  const existingBatch = state.measurements.some((m) => m.crew_id === crew_id && m.generated_batch_id === batch);
   if (existingBatch) return { batch_id: batch, created: 0, skipped_duplicate_batch: true };
   const rand = seeded(seed);
   // A separate stream keeps the background readings unchanged when placing the spike.
@@ -442,18 +442,30 @@ export function generateScenario(state, { scenario = "stable_baseline", days = 7
     created.push(dupe);
   }
   state.measurements.push(...created);
-  state.simulator = { status: "idle", scenario, seed, last_generated_at: nowIso() };
+  updateSimulator(state, crew_id, { status: "idle", scenario, seed, last_generated_at: nowIso() });
   audit(state, "simulator.generate", batch, `${created.length} measurements`);
   return { batch_id: batch, created: created.length, skipped_duplicate_batch: false };
 }
 
-export function clearDemoData(state) {
+export function updateSimulator(state, crewId, changes) {
+  if (crewId === state.crew[0]?.crew_id) {
+    state.simulator = { ...state.simulator, ...changes };
+    return state.simulator;
+  }
+  state.crewSimulators ||= {};
+  state.crewSimulators[crewId] = { status: "idle", scenario: null, seed: 42, last_generated_at: null, ...state.crewSimulators[crewId], ...changes };
+  return state.crewSimulators[crewId];
+}
+
+export function clearDemoData(state, crewId) {
   const before = state.measurements.length;
-  state.measurements = state.measurements.filter((m) => !m.scenario_id && m.source !== "imported_sample");
-  state.baselines = [];
-  state.investigations = [];
-  state.alerts = [];
-  state.followUps = [];
+  const selected = (row) => !crewId || row.crew_id === crewId;
+  const alertIds = new Set(state.alerts.filter(selected).map((row) => row.alert_id));
+  state.measurements = state.measurements.filter((m) => !selected(m) || (!m.scenario_id && (m.source !== "imported_sample" || m.import_batch_id)));
+  state.baselines = state.baselines.filter((row) => !selected(row));
+  state.investigations = state.investigations.filter((row) => !selected(row));
+  state.alerts = state.alerts.filter((row) => !selected(row));
+  state.followUps = crewId ? state.followUps.filter((row) => !alertIds.has(row.alert_id)) : [];
   audit(state, "data.clear_demo", "measurements", `${before - state.measurements.length} removed`);
   return { removed: before - state.measurements.length };
 }
@@ -522,7 +534,7 @@ export function parseCsv(text) {
   }
 }
 
-export function importMeasurements(state, text, { commit = false, currentTime = new Date(), filename = "Pasted CSV" } = {}) {
+export function importMeasurements(state, text, { commit = false, currentTime = new Date(), filename = "Pasted CSV", crewId } = {}) {
   const records = parseCsv(text);
   const workingState = { ...state, measurements: [...state.measurements] };
   const accepted = [];
@@ -531,6 +543,7 @@ export function importMeasurements(state, text, { commit = false, currentTime = 
   for (const [index, row] of records.entries()) {
     try {
       if (!state.crew.some((member) => member.crew_id === row.crew_id)) throw new Error("Unknown crew_id");
+      if (crewId && row.crew_id !== crewId) throw new Error(`Row must use the selected crew ID: ${crewId}`);
       const measurement = createMeasurement({ ...row, source: row.source || "csv_import" }, workingState, currentTime);
       if (measurement.quality_flags.includes("duplicate")) {
         duplicates += 1;
@@ -558,9 +571,10 @@ function isLegacyImport(row) {
   return !row.import_batch_id && ["csv_import", "imported_sample"].includes(row.source);
 }
 
-export function listImports(state) {
+export function listImports(state, crewId) {
   const batches = new Map((state.importBatches || []).map((batch) => [batch.batch_id, { ...batch, count: 0 }]));
   for (const row of state.measurements) {
+    if (crewId && row.crew_id !== crewId) continue;
     const id = row.import_batch_id || (isLegacyImport(row) ? "legacy-csv" : null);
     if (!id) continue;
     if (!batches.has(id)) batches.set(id, { batch_id: id, filename: id === "legacy-csv" ? "Earlier CSV imports (grouped)" : "CSV import", imported_at: row.ingested_at || null, count: 0 });
@@ -568,16 +582,19 @@ export function listImports(state) {
   }
   return {
     active: [...batches.values()].filter((batch) => batch.count > 0),
-    deleted: (state.deletedImports || []).map((batch) => ({ batch_id: batch.batch_id, filename: batch.filename, deleted_at: batch.deleted_at, count: batch.measurements.length }))
+    deleted: (state.deletedImports || []).map((batch) => ({
+      batch_id: batch.batch_id, filename: batch.filename, deleted_at: batch.deleted_at,
+      count: batch.measurements.filter((row) => !crewId || row.crew_id === crewId).length
+    })).filter((batch) => batch.count > 0)
   };
 }
 
-export function deleteImport(state, batchId, { confirm, expected_count } = {}) {
+export function deleteImport(state, batchId, { confirm, expected_count } = {}, crewId) {
   if (confirm !== true) throw Object.assign(new Error("Deletion confirmation is required"), { status: 400 });
-  const batch = listImports(state).active.find((item) => item.batch_id === batchId);
+  const batch = listImports(state, crewId).active.find((item) => item.batch_id === batchId);
   if (!batch) throw Object.assign(new Error("Import not found"), { status: 404 });
   if (expected_count !== batch.count) throw Object.assign(new Error("Import record count changed; refresh and confirm again"), { status: 409 });
-  const removed = state.measurements.filter((row) => batchId === "legacy-csv" ? isLegacyImport(row) : row.import_batch_id === batchId);
+  const removed = state.measurements.filter((row) => (!crewId || row.crew_id === crewId) && (batchId === "legacy-csv" ? isLegacyImport(row) : row.import_batch_id === batchId));
   const ids = new Set(removed.map((row) => row.measurement_id));
   const crewIds = new Set(removed.map((row) => row.crew_id));
   const investigations = state.investigations.filter((item) => [...(item.evidence || []), ...(item.quality_limitations || [])].some((e) => ids.has(e.measurement_id)));
@@ -586,33 +603,34 @@ export function deleteImport(state, batchId, { confirm, expected_count } = {}) {
   const alertIds = new Set(alerts.map((item) => item.alert_id));
   const followUps = state.followUps.filter((item) => alertIds.has(item.alert_id));
   state.deletedImports ||= [];
-  state.deletedImports.unshift({ ...batch, batch_id: uid("deleted-import"), original_batch_id: batchId, deleted_at: nowIso(), measurements: removed, dependent_records: { investigations, alerts, followUps, aiExplanations: state.aiExplanations } });
+  state.deletedImports.unshift({ ...batch, batch_id: uid("deleted-import"), original_batch_id: batchId, deleted_at: nowIso(), measurements: removed, dependent_records: { investigations, alerts, followUps, aiExplanations: crewId ? [] : state.aiExplanations } });
   state.measurements = state.measurements.filter((row) => !ids.has(row.measurement_id));
   state.baselines = state.baselines.filter((item) => !crewIds.has(item.crew_id));
   state.investigations = state.investigations.filter((item) => !investigationIds.has(item.investigation_id));
   state.alerts = state.alerts.filter((item) => !alertIds.has(item.alert_id));
   state.followUps = state.followUps.filter((item) => !alertIds.has(item.alert_id));
-  state.aiExplanations = [];
+  if (!crewId) state.aiExplanations = [];
   audit(state, "import.deleted", batchId, `${removed.length} readings moved to deleted imports`);
   return { removed: removed.length };
 }
 
-export function restoreImport(state, deletedId) {
+export function restoreImport(state, deletedId, crewId) {
   const deleted = (state.deletedImports || []).find((batch) => batch.batch_id === deletedId);
-  if (!deleted) throw Object.assign(new Error("Deleted import not found"), { status: 404 });
+  const readings = deleted?.measurements.filter((row) => !crewId || row.crew_id === crewId) || [];
+  if (!readings.length) throw Object.assign(new Error("Deleted import not found"), { status: 404 });
   const existingIds = new Set(state.measurements.map((row) => row.measurement_id));
   const existingReadings = new Set(state.measurements.map((row) => JSON.stringify([row.crew_id, row.metric_type, new Date(row.measured_at).getTime(), Number(row.value)])));
-  if (deleted.measurements.some((row) => existingIds.has(row.measurement_id) || existingReadings.has(JSON.stringify([row.crew_id, row.metric_type, new Date(row.measured_at).getTime(), Number(row.value)])))) {
+  if (readings.some((row) => existingIds.has(row.measurement_id) || existingReadings.has(JSON.stringify([row.crew_id, row.metric_type, new Date(row.measured_at).getTime(), Number(row.value)])))) {
     throw Object.assign(new Error("Matching readings already exist; restore cancelled to prevent duplicates"), { status: 409 });
   }
-  state.measurements.push(...deleted.measurements);
-  const crewIds = new Set(deleted.measurements.map((row) => row.crew_id));
+  state.measurements.push(...readings);
+  const crewIds = new Set(readings.map((row) => row.crew_id));
   state.baselines = state.baselines.filter((item) => !crewIds.has(item.crew_id));
   // Restore readings only; old decisions must be reviewed against the current data.
-  deleted.restored_at = nowIso();
-  state.deletedImports = state.deletedImports.filter((batch) => batch.batch_id !== deletedId);
-  audit(state, "import.restored", deleted.original_batch_id, `${deleted.measurements.length} readings restored; rerun investigation`);
-  return { restored: deleted.measurements.length };
+  deleted.measurements = deleted.measurements.filter((row) => !crewIds.has(row.crew_id));
+  if (!deleted.measurements.length) state.deletedImports = state.deletedImports.filter((batch) => batch.batch_id !== deletedId);
+  audit(state, "import.restored", deleted.original_batch_id, `${readings.length} readings restored; rerun investigation`);
+  return { restored: readings.length };
 }
 
 export function localAiExplanation(state) {

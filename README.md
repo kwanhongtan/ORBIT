@@ -40,3 +40,11 @@ The repository includes the built frontend. After changing frontend code, run `n
 If using PowerShell and it blocks `npm.ps1`, use `npm.cmd install` and `npm.cmd start`, or use Command Prompt as described above.
 
 No Gemini API key is required for the current version. Local records are saved in `data/orbit-db.json`.
+
+## Working with multiple crew members
+
+Use **Add crew** in the header to create a profile, then use the **Crew member** selector to switch between profiles. New profiles start empty. The selected profile controls check-ins, timelines, replay, investigations, alerts, follow-ups, and the Data & Simulation Lab.
+
+To import a CSV, select the crew member first and copy the crew ID shown in **CSV Import** into the file's `crew_id` column. Import one crew member at a time. Exports, import deletion and recovery, and **Reset Demo** apply to the selected profile.
+
+Profiles organize data inside one shared local workspace. Anyone who can open that workspace can switch between profiles.
