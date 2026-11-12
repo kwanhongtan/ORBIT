@@ -44,11 +44,13 @@ type Measurement = {
   source: string;
   quality_status: string;
   quality_flags: string[];
+  notes?: string;
   freshness?: "current" | "stale" | "future";
 };
 
 type Alert = {
   alert_id: string;
+  investigation_id?: string;
   title: string;
   severity: "INFORMATIONAL" | "LOW" | "MEDIUM" | "HIGH";
   status: string;
@@ -56,8 +58,45 @@ type Alert = {
   evidence_summary: any[];
 };
 
+type FollowUpRecord = {
+  action_id: string;
+  alert_id: string;
+  description: string;
+  assigned_to: string;
+  due_at: string | null;
+  metric_type?: string;
+  status: string;
+  completion_notes: string;
+  measurement?: Measurement | null;
+};
+
+const measurementGuidance: Record<string, string> = {
+  heart_rate: "Record the device’s pulse in beats per minute. Note whether the reading was taken at rest or after activity.",
+  blood_oxygen: "Follow the device instructions. Keep your hand relaxed and still, wait for a stable display, and record SpO₂ as a percentage.",
+  body_temperature: "Record the thermometer reading in °C. Note the measurement site and method so later readings can be compared.",
+  systolic_bp: "Record the upper number from the cuff display. Record the lower number separately using the same measurement time.",
+  diastolic_bp: "Record the lower number from the cuff display. Record the upper number separately using the same measurement time.",
+  sleep_duration: "Enter hours slept. Note the sleep period and use the same tracking method for later entries.",
+  exercise_duration: "Enter the session duration in minutes. Note the activity and intensity.",
+  radiation_dose: "Enter a simulated dose in mSv and identify the simulation source in the notes.",
+  bone_assessment: "Enter a prototype score and describe the scoring method in the notes."
+};
+const missionContext: Record<string, string> = {
+  heart_rate: "Fluid shifts and cardiovascular deconditioning can change how the body responds to activity. Record recent exercise and whether the reading was taken at rest.",
+  systolic_bp: "Fluid shifts in altered gravity can affect circulation. Record the measurement setup and recent activity.",
+  diastolic_bp: "Fluid shifts in altered gravity can affect circulation. Record the measurement setup and recent activity.",
+  sleep_duration: "Work schedules and circadian disruption can affect sleep. Record a schedule shift or interruption if one occurred.",
+  sleep_quality: "Work schedules and circadian disruption can affect sleep. Record a schedule shift or interruption if one occurred.",
+  fatigue: "Sleep loss and workload can affect fatigue. Record recent sleep disruption or unusual workload.",
+  mood: "Isolation and confinement can affect wellbeing. Record any relevant changes in routine or workload.",
+  stress: "Isolation, confinement, and work demands can affect stress. Record any relevant changes in routine or workload."
+};
+
 type Investigation = {
   investigation_id: string;
+  alert_id?: string;
+  as_of?: string;
+  window_start?: string;
   title: string;
   severity: "INFORMATIONAL" | "LOW" | "MEDIUM" | "HIGH";
   explanation: string;
@@ -65,6 +104,17 @@ type Investigation = {
   quality_limitations: any[];
   missing_metrics?: string[];
   insufficient_baselines?: string[];
+  signal_checks?: {
+    metric_type: string;
+    value: number | null;
+    measured_at: string | null;
+    baseline_mean: number | null;
+    baseline_samples: number;
+    baseline_samples_required?: number;
+    bound: number | null;
+    direction: "low" | "high";
+    result: "flagged" | "clear" | "insufficient_data";
+  }[];
 };
 
 const nav = [
@@ -76,6 +126,10 @@ const nav = [
   ["alerts", "Action Centre", AlertTriangle],
   ["reports", "Data & Simulation Lab", Database]
 ] as const;
+
+const alertPriority = { HIGH: 0, MEDIUM: 1, LOW: 2, INFORMATIONAL: 3 };
+const isOpenFollowUp = (task: FollowUpRecord) => !["COMPLETED", "CANCELLED"].includes(task.status);
+const dueTime = (task: FollowUpRecord) => Date.parse(task.due_at || "") || Infinity;
 
 const request = async (path: string, options: RequestInit = {}) => {
   const res = await fetch(path, options);
@@ -98,6 +152,7 @@ function App() {
   const [crew, setCrew] = useState<CrewMember[]>([]);
   const [selected, setSelected] = useState("");
   const [error, setError] = useState("");
+  const [practice, setPractice] = useState<{ id: string; member: CrewMember }>();
 
   const loadCrew = () => {
     setError("");
@@ -110,10 +165,20 @@ function App() {
 
   useEffect(loadCrew, []);
 
-  const member = crew.find((profile) => profile.crew_id === selected);
+  const member = practice?.member ?? crew.find((profile) => profile.crew_id === selected);
   if (!member) return <main className="boot">{error ? <div role="alert"><p>{error}</p><button onClick={loadCrew}>Retry</button></div> : "Loading crew profiles…"}</main>;
 
-  return <CrewWorkspace key={selected} member={member} crew={crew} active={active} setActive={setActive} selectCrew={setSelected} addCrew={(profile) => {
+  return <CrewWorkspace key={practice?.id ?? selected} member={member} crew={practice ? [member] : crew} active={active} setActive={setActive}
+    practiceId={practice?.id} startPractice={async () => {
+      setPractice(await request("/api/practice", post()));
+      setActive("investigator");
+      window.scrollTo(0, 0);
+    }} exitPractice={() => {
+      if (practice) void request(`/api/practice?practice=${encodeURIComponent(practice.id)}`, { method: "DELETE" }).catch(() => {});
+      setPractice(undefined);
+      setActive("investigator");
+      window.scrollTo(0, 0);
+    }} selectCrew={setSelected} addCrew={(profile) => {
     setCrew((current) => [...current, profile]);
     setSelected(profile.crew_id);
   }} removeCrew={(profiles) => {
@@ -122,7 +187,7 @@ function App() {
   }} />;
 }
 
-function CrewWorkspace({ member, crew, active, setActive, selectCrew, addCrew, removeCrew }: {
+function CrewWorkspace({ member, crew, active, setActive, selectCrew, addCrew, removeCrew, practiceId, startPractice, exitPractice }: {
   member: CrewMember;
   crew: CrewMember[];
   active: string;
@@ -130,12 +195,19 @@ function CrewWorkspace({ member, crew, active, setActive, selectCrew, addCrew, r
   selectCrew: (id: string) => void;
   addCrew: (profile: CrewMember) => void;
   removeCrew: (profiles: CrewMember[]) => void;
+  practiceId?: string;
+  startPractice: () => Promise<void>;
+  exitPractice: () => void;
 }) {
-  const scopedPath = useMemo(() => (path: string) =>
-    `${path}${path.includes("?") ? "&" : "?"}${new URLSearchParams({ crew_id: member.crew_id })}`, [member.crew_id]);
+  const scopedPath = useMemo(() => (path: string) => {
+    const params = new URLSearchParams({ crew_id: member.crew_id });
+    if (practiceId) params.set("practice", practiceId);
+    return `${path}${path.includes("?") ? "&" : "?"}${params}`;
+  }, [member.crew_id, practiceId]);
   const api = useMemo(() => (path: string, options?: RequestInit) => request(scopedPath(path), options), [scopedPath]);
   const [data, setData] = useState<any>(null);
   const [timelineMetric, setTimelineMetric] = useState<string>();
+  const [timelineQuality, setTimelineQuality] = useState("all");
   const [busy, setBusy] = useState(false);
   const [addingCrew, setAddingCrew] = useState(false);
   const [savingCrew, setSavingCrew] = useState(false);
@@ -147,6 +219,15 @@ function CrewWorkspace({ member, crew, active, setActive, selectCrew, addCrew, r
   const [seed, setSeed] = useState(42);
   const [metric, setMetric] = useState("heart_rate");
   const [manualValue, setManualValue] = useState("");
+  const [measurementNotes, setMeasurementNotes] = useState("");
+  const [measurementTime, setMeasurementTime] = useState("");
+  const [measurementTask, setMeasurementTask] = useState<FollowUpRecord>();
+  const [responseTarget, setResponseTarget] = useState<string>();
+  const [planningAlert, setPlanningAlert] = useState<string>();
+  const [recordedTimes, setRecordedTimes] = useState<string[]>([]);
+  const [historyTime, setHistoryTime] = useState("");
+  const [investigationPreview, setInvestigationPreview] = useState<{ finding: Investigation; demo: boolean }>();
+  const [historyError, setHistoryError] = useState("");
   const [checkin, setCheckin] = useState({ mood: "7", fatigue: "3", stress: "3", sleep_quality: "4", symptom_severity: "0", notes: "" });
   const [csvText, setCsvText] = useState("");
   const [csvPreview, setCsvPreview] = useState<any>(null);
@@ -188,20 +269,64 @@ function CrewWorkspace({ member, crew, active, setActive, selectCrew, addCrew, r
     load().catch((err) => setMessage(err.message));
   }, []);
 
+  useEffect(() => {
+    if (active !== "investigator") return;
+    let cancelled = false;
+    api("/api/replay/timeline").then((timeline) => {
+      if (!cancelled) {
+        setRecordedTimes(timeline.timestamps);
+        setHistoryError("");
+      }
+    }).catch(() => { if (!cancelled) setHistoryError("Could not load recorded times."); });
+    return () => { cancelled = true; };
+  }, [active, api, data]);
+
   const measurements: Measurement[] = data?.measurements || [];
   const alerts: Alert[] = data?.alerts || [];
   const investigations: Investigation[] = data?.investigations || [];
   const metrics = data?.config?.metrics || {};
   const activeAlerts = alerts.filter((a) => !["RESOLVED", "FALSE_POSITIVE"].includes(a.status));
+  const alertQueue = activeAlerts.slice().sort((a, b) => alertPriority[a.severity] - alertPriority[b.severity] ||
+    Number(b.status === "NEW") - Number(a.status === "NEW"));
+  const followUps: FollowUpRecord[] = data?.followUps || [];
+  const taskQueue = followUps.filter(isOpenFollowUp).sort((a, b) => dueTime(a) - dueTime(b));
+  const overdueCount = taskQueue.filter((task) => dueTime(task) < Date.now()).length;
+  const latestFinding = investigations[0];
+  const linkedAlert = latestFinding && alerts.find((alert) => alert.alert_id === latestFinding.alert_id ||
+    alert.investigation_id === latestFinding.investigation_id);
   const latestByMetric = data?.summary.latest_readings || {};
   const pageTitle = nav.find(([id]) => id === active)?.[1] || "Mission Overview";
   const navigate = (view: string) => { setActive(view); window.scrollTo({ top: 0, behavior: "auto" }); };
-  const openMetric = (metric: string) => {
+  const openResponse = (id: string) => {
+    setResponseTarget(id);
+    navigate("alerts");
+  };
+  useEffect(() => {
+    if (active !== "alerts" || !responseTarget) return;
+    const card = document.getElementById(responseTarget);
+    const history = card?.closest("details");
+    if (history) history.open = true;
+    card?.focus();
+    card?.scrollIntoView({ block: "center" });
+    setResponseTarget(undefined);
+    setPlanningAlert(undefined);
+  }, [active, responseTarget]);
+  const openTimeline = (metric: string, quality = "all") => {
     setTimelineMetric(metric);
+    setTimelineQuality(quality);
     navigate("timeline");
   };
+  const openMetric = (metric: string) => openTimeline(metric);
+  const openMeasurement = (metric: string, task?: FollowUpRecord) => {
+    setMetric(metric);
+    setMeasurementTask(task);
+    setManualValue("");
+    setMeasurementTime("");
+    setMeasurementNotes("");
+    navigate("checkin");
+  };
 
-  if (!data) return <main className="boot">{message ? <div role="alert"><h1>Unable to load ORBIT</h1><p>{message}</p><button onClick={() => { setMessage(""); load().catch((err) => setMessage(err.message)); }}><RefreshCw size={16} /> Retry</button></div> : <><RefreshCw className="spin" /> Loading ORBIT...</>}</main>;
+  if (!data) return <main className="boot">{message ? <div role="alert"><h1>Unable to load ORBIT</h1><p>{message}</p>{practiceId ? <button onClick={exitPractice}>Exit practice</button> : <button onClick={() => { setMessage(""); load().catch((err) => setMessage(err.message)); }}><RefreshCw size={16} /> Retry</button>}</div> : <><RefreshCw className="spin" /> Loading ORBIT...</>}</main>;
 
   return (
     <div className="shell">
@@ -214,15 +339,18 @@ function CrewWorkspace({ member, crew, active, setActive, selectCrew, addCrew, r
         <header className="page-header">
           <div><p className="eyebrow">{data.summary.mission.mission_name}</p><h1>{pageTitle}</h1></div>
           <div className="header-actions">
+            {practiceId ? <button className="crew-action" disabled={busy} onClick={exitPractice}>Exit practice</button> : <>
             <label className="crew-select">Crew member<select value={member.crew_id} disabled={busy || savingCrew} onChange={(event) => selectCrew(event.target.value)}>
               {crew.map((profile) => <option key={profile.crew_id} value={profile.crew_id}>{profile.name}</option>)}
             </select></label>
             <button className="crew-action" aria-expanded={addingCrew} onClick={() => { setCrewError(""); setAddingCrew(!addingCrew); }} disabled={busy || savingCrew}>Add crew</button>
             <button className="crew-action" onClick={() => { setCrewError(""); setDeletingCrew(true); }} disabled={busy || savingCrew || crew.length < 2}
               title={crew.length < 2 ? "Keep at least one active crew profile" : `Delete ${member.name}`}>Delete crew</button>
+            </>}
             <button aria-label="Refresh data" title="Refresh data" onClick={() => action(async () => {}, "Refreshed")} disabled={busy || savingCrew}><RefreshCw size={16} className={busy ? "spin" : ""} /></button>
           </div>
         </header>
+        {practiceId && <p className="practice-banner"><strong>Practice session</strong> · Use simulated readings only. The session ends when you exit, reload, or after one hour.</p>}
         {addingCrew && <section className="panel crew-editor" aria-label="New crew profile">
           <h2>New crew profile</h2>
           <form onSubmit={async (event) => {
@@ -275,10 +403,12 @@ function CrewWorkspace({ member, crew, active, setActive, selectCrew, addCrew, r
 
         {active === "overview" && <section>
           <div className="kpis compact">
-            <MetricCard label="Total readings" value={data.summary.counts.measurements.toLocaleString()} hint={`${data.summary.counts.valid_measurements.toLocaleString()} passed input checks`} icon={<Activity />} />
-            <MetricCard label="Quality warnings" value={data.summary.counts.quality_warnings} hint="Records requiring verification" icon={<ShieldCheck />} tone="LOW" />
-            <MetricCard label="Open alerts" value={data.summary.counts.active_alerts} hint="Awaiting team review" icon={<AlertTriangle />} tone={activeAlerts[0]?.severity} />
-            <MetricCard label="Pending follow-ups" value={data.summary.counts.open_followups} hint="Recorded response tasks" icon={<ClipboardCheck />} />
+            <MetricCard label="Total readings" value={data.summary.counts.measurements.toLocaleString()} hint="View all measurement records" icon={<Activity />} onClick={() => openTimeline("all")} />
+            <MetricCard label="Quality warnings" value={data.summary.counts.quality_warnings} hint="Review flagged measurement records" icon={<ShieldCheck />} tone="LOW" onClick={() => openTimeline("all", "warnings")} />
+            <MetricCard label="Open alerts" value={data.summary.counts.active_alerts} hint="View in Action Centre" icon={<AlertTriangle />} tone={activeAlerts[0]?.severity}
+              onClick={() => activeAlerts.length === 1 ? openResponse(`alert-${activeAlerts[0].alert_id}`) : navigate("alerts")} />
+            <MetricCard label="Pending follow-ups" value={data.summary.counts.open_followups} hint="View in Action Centre" icon={<ClipboardCheck />}
+              onClick={() => openResponse(taskQueue.length === 1 ? `follow-up-${taskQueue[0].action_id}` : "open-follow-ups")} />
           </div>
           <MissionHero summary={data.summary} activeAlerts={activeAlerts} latest={latestByMetric} onNavigate={navigate} onOpenMetric={openMetric} />
           <LatestReadings latest={latestByMetric} metrics={metrics} />
@@ -289,7 +419,7 @@ function CrewWorkspace({ member, crew, active, setActive, selectCrew, addCrew, r
         </section>}
 
         {active === "timeline" && <section>
-          <HealthTimeline metrics={metrics} revision={data} api={api} initialMetric={timelineMetric} />
+          <HealthTimeline metrics={metrics} revision={data} api={api} initialMetric={timelineMetric} initialQuality={timelineQuality} />
           <Panel title="Health Timeline">
             <TimelineRail rows={measurements.slice(0, 18)} alerts={alerts.slice(0, 3)} />
           </Panel>
@@ -297,44 +427,113 @@ function CrewWorkspace({ member, crew, active, setActive, selectCrew, addCrew, r
 
         {active === "replay" && <MissionReplay metrics={metrics} revision={data} request={api} />}
 
-        {active === "investigator" && <section className="grid two">
+        {active === "investigator" && <section>
           <Panel title="Investigation Controls">
-            <p className="muted">Personal baseline comparison · 36-hour observation window</p>
+            <p className="muted">The live run checks the 36 hours ending at {member.name}’s latest eligible reading. Use an earlier window to inspect changes that have already passed.</p>
             <div className="toolbar">
-              <button className="primary" onClick={() => action(() => api("/api/investigations/run", post()), "Investigation complete")}><BarChart3 size={16} /> Run Investigator</button>
-              <button onClick={() => action(() => api("/api/baselines/recalculate", post()), "Baselines recalculated")}>Recalculate Baselines</button>
+              <button className="primary" disabled={busy} onClick={() => action(async () => { await api("/api/investigations/run", post()); setInvestigationPreview(undefined); }, "Investigation complete")}><BarChart3 size={16} /> Run Investigator</button>
+              <button disabled={busy} onClick={() => action(() => api("/api/baselines/recalculate", post()), "Baselines recalculated")}>Recalculate Baselines</button>
             </div>
-            <BaselineTable rows={data.baselines} metrics={metrics} />
+            <form className="guidance-form" onSubmit={(event) => {
+              event.preventDefault();
+              action(async () => {
+                const snapshot = await api(`/api/replay/snapshot?at=${encodeURIComponent(historyTime)}`);
+                setInvestigationPreview({ finding: snapshot.finding, demo: false });
+              }, "Earlier window preview loaded");
+            }}>
+              <label>Earlier recorded time<select value={historyTime} onChange={(event) => setHistoryTime(event.target.value)}>
+                <option value="">Choose a recorded time</option>
+                {recordedTimes.slice().reverse().map((time) => <option key={time} value={time}>{new Date(time).toLocaleString()}</option>)}
+              </select></label>
+              {historyError && <p role="alert">{historyError}</p>}
+              <button disabled={busy || !historyTime}>Preview earlier window</button>
+            </form>
+            <div className="toolbar"><button disabled={busy} onClick={() => action(async () => {
+              setInvestigationPreview({ finding: await api("/api/investigations/demo"), demo: true });
+            }, "Drift demo loaded")}>Try gradual drift demo</button>
+            {!practiceId && <button disabled={busy} onClick={() => action(startPractice, "Practice started")}>Start practice session</button>}</div>
+            <p className="muted">The demo compares simulated gradual drift against a stable baseline. Previews do not save readings or create live alerts.</p>
           </Panel>
-          <Panel title="Findings">{investigations.slice(0, 8).map((f) => <Finding key={f.investigation_id} finding={f} />)}</Panel>
+          {investigationPreview && <Panel title={investigationPreview.demo ? "Gradual drift demo" : "Earlier window preview"}>
+            <p className="muted">{investigationPreview.finding.alert_id ? "This result meets the combined-alert rule." : "This window did not meet the combined-alert rule."} Preview only.</p>
+            <InvestigationResult finding={investigationPreview.finding} metrics={metrics} onOpenMetric={investigationPreview.demo ? undefined : openMetric} />
+            <button onClick={() => setInvestigationPreview(undefined)}>Close preview</button>
+          </Panel>}
+          <Panel title="Latest saved result">
+            {latestFinding ? <InvestigationResult finding={latestFinding} alert={linkedAlert} metrics={metrics} onOpenMetric={openMetric} onMeasure={openMeasurement} onOpenAlert={(id) => openResponse(`alert-${id}`)} onPlan={(id) => { setPlanningAlert(id); openResponse(`alert-${id}`); }} /> : <>
+              <p className="muted">Run an investigation to see which readings can be compared with a personal baseline.</p>
+              {!measurements.length && <div className="toolbar"><button onClick={() => openMeasurement("heart_rate")}>Record a reading</button><button onClick={() => navigate("reports")}>Open Simulation Lab</button></div>}
+            </>}
+          </Panel>
+          <div className="grid two">
+            <Panel title="Personal Baselines"><BaselineTable rows={data.baselines} metrics={metrics} /></Panel>
+            <Panel title="Earlier Investigations">{investigations.length > 1 ? investigations.slice(1, 8).map((f) => <Finding key={f.investigation_id} finding={f} />) : <p className="muted">Earlier runs will appear here.</p>}</Panel>
+          </div>
         </section>}
 
         {active === "checkin" && <section className="grid two">
           <Panel title="Daily Self-assessment">
             <p className="muted">Adds information that simulated sensors cannot directly provide: mood, symptoms, fatigue, stress, and sleep quality.</p>
+            <p className="muted">Use the same scale each day. Higher mood and sleep quality scores mean better, while higher fatigue, stress, and symptom scores mean more severe. Sleep quality uses 1–5 and symptoms use 0–10. The other scores use 1–10.</p>
             <div className="form-grid">
               {["mood", "fatigue", "stress", "sleep_quality", "symptom_severity"].map((name) => <label key={name}>{labelFor(name, metrics)}<input type="number" value={(checkin as any)[name]} onChange={(e) => setCheckin({ ...checkin, [name]: e.target.value })} /></label>)}
             </div>
-            <textarea value={checkin.notes} onChange={(e) => setCheckin({ ...checkin, notes: e.target.value })} placeholder="Context, symptoms, activity notes, or verification comments" />
+            <label>Mission context or symptoms<textarea value={checkin.notes} onChange={(e) => setCheckin({ ...checkin, notes: e.target.value })} placeholder="Schedule shift, interrupted sleep, recent exercise, or symptoms" /></label>
+            <p className="muted">Schedule changes, sleep loss, and isolation can affect daily wellbeing. <a href="https://www.nasa.gov/hrp/risks/" target="_blank" rel="noreferrer">NASA Human Research Program</a></p>
             <button className="primary" onClick={() => action(async () => {
               for (const name of ["mood", "fatigue", "stress", "sleep_quality", "symptom_severity"]) {
-                await api("/api/measurements", post({ metric_type: name, value: (checkin as any)[name], unit: metrics[name].unit, measured_at: new Date().toISOString(), source: "manual", notes: checkin.notes }));
+                await api("/api/measurements", post({ metric_type: name, value: (checkin as any)[name], unit: metrics[name].unit, measured_at: new Date().toISOString(), source: practiceId ? "simulated_sensor" : "manual", notes: checkin.notes }));
               }
             }, "Daily check-in saved")}><ListChecks size={16} /> Submit Check-in</button>
           </Panel>
           <Panel title="Manual Measurement">
-            <p className="muted">Use this for blood pressure, oxygen saturation, radiation-dose placeholders, or bone-assessment placeholders. These are prototype records, not clinical assessments.</p>
-            <div className="toolbar">
-              <select value={metric} onChange={(e) => setMetric(e.target.value)}>{Object.keys(metrics).map((m) => <option key={m} value={m}>{metrics[m].label}</option>)}</select>
-              <input placeholder="Value" value={manualValue} onChange={(e) => setManualValue(e.target.value)} />
-              <button onClick={() => action(() => api("/api/measurements", post({ metric_type: metric, value: manualValue, unit: metrics[metric].unit, measured_at: new Date().toISOString(), source: "manual" })), "Manual measurement saved")}>Add Measurement</button>
-            </div>
+            <form className="guidance-form" onSubmit={(event) => {
+              event.preventDefault();
+              action(async () => {
+                await api("/api/measurements", post({
+                  metric_type: metric, value: manualValue, unit: metrics[metric].unit,
+                  measured_at: measurementTime ? new Date(measurementTime).toISOString() : new Date().toISOString(),
+                  source: practiceId ? "simulated_sensor" : "manual", notes: measurementNotes.trim(), follow_up_id: measurementTask?.action_id
+                }));
+                setManualValue("");
+                setMeasurementNotes("");
+                setMeasurementTime("");
+                if (measurementTask) {
+                  setMeasurementTask(undefined);
+                  openResponse(`follow-up-${measurementTask.action_id}`);
+                }
+              }, "Manual measurement saved");
+            }}>
+              {measurementTask && <p>Repeat measurement for <strong>{measurementTask.description}</strong></p>}
+              <label>Metric<select disabled={!!measurementTask} value={metric} onChange={(e) => { setMetric(e.target.value); setManualValue(""); }}>{Object.keys(metrics).map((m) => <option key={m} value={m}>{metrics[m].label}</option>)}</select></label>
+              <p className="muted" id="measurement-guide">{measurementGuidance[metric] || "Use a consistent scoring method and note what influenced this rating."} ORBIT accepts {metrics[metric].min}–{metrics[metric].max} {displayUnit(metrics[metric].unit)} as its input range.</p>
+              {missionContext[metric] && <p className="muted">{missionContext[metric]} <a href="https://www.nasa.gov/hrp/risks/" target="_blank" rel="noreferrer">NASA Human Research Program</a></p>}
+              <label>Value ({displayUnit(metrics[metric].unit)})<input type="number" step="any" min={metrics[metric].min} max={metrics[metric].max} required aria-describedby="measurement-guide" value={manualValue} onChange={(e) => setManualValue(e.target.value)} /></label>
+              <label>Measurement time (optional)<input type="datetime-local" value={measurementTime} onChange={(e) => setMeasurementTime(e.target.value)} /></label>
+              <small className="muted">Leave the time blank to use the current time.</small>
+              <label>Context or device notes (optional)<textarea value={measurementNotes} onChange={(e) => setMeasurementNotes(e.target.value)} /></label>
+              <button disabled={busy}>Add Measurement</button>
+              {measurementTask && <button type="button" onClick={() => { setMeasurementTask(undefined); openResponse(`follow-up-${measurementTask.action_id}`); }}>Return to Action Centre</button>}
+            </form>
           </Panel>
         </section>}
 
-        {active === "alerts" && <section className="grid two">
-          <Panel title="Guided Response">{alerts.length ? alerts.map((a) => <AlertCard key={a.alert_id} alert={a} action={action} api={api} />) : <p className="muted">No alerts yet.</p>}</Panel>
-          <Panel title="Follow-up Actions">{data.followUps.length ? data.followUps.map((f: any) => <FollowUp key={f.action_id} follow={f} action={action} api={api} />) : <p className="muted">Create a follow-up from an alert to show closed-loop review.</p>}</Panel>
+        {active === "alerts" && <section>
+          <div className="kpis compact">
+            <MetricCard label="New alerts" value={alertQueue.filter((a) => a.status === "NEW").length} hint="Awaiting acknowledgement" icon={<AlertTriangle />} />
+            <MetricCard label="Under review" value={alertQueue.filter((a) => a.status !== "NEW").length} hint="Open alerts already reviewed or in progress" icon={<Activity />} />
+            <MetricCard label="Open follow-ups" value={taskQueue.length} hint="Ordered by due time" icon={<ClipboardCheck />} />
+            <MetricCard label="Overdue follow-ups" value={overdueCount} hint="Open tasks past their due time" icon={<ListChecks />} tone={overdueCount ? "LOW" : undefined} />
+          </div>
+          <div className="grid two">
+            <Panel title="Open Alerts">{alertQueue.length ? alertQueue.map((a) => <AlertCard key={a.alert_id} alert={a} action={action} api={api} metrics={metrics} busy={busy} onOpenMetric={openMetric} crewName={member.name} practice={!!practiceId} startPlanning={planningAlert === a.alert_id} />) : <><p className="muted">No open alerts for {member.name}.</p><button onClick={() => navigate("investigator")}>Open Drift Investigation</button></>}</Panel>
+            <Panel title="Open Follow-ups" headingId="open-follow-ups">{taskQueue.length ? taskQueue.map((f) => <FollowUp key={f.action_id} follow={f} alert={alerts.find((a) => a.alert_id === f.alert_id)} action={action} api={api} metrics={metrics} busy={busy} onMeasure={openMeasurement} />) : <p className="muted">Plan a follow-up from an open alert to assign a review or repeat reading.</p>}</Panel>
+          </div>
+          {(alerts.length > alertQueue.length || followUps.length > taskQueue.length) && <details className="panel">
+            <summary>Closed alerts and follow-ups ({alerts.length - alertQueue.length + followUps.length - taskQueue.length})</summary>
+            {alerts.filter((a) => !activeAlerts.includes(a)).map((a) => <AlertCard key={a.alert_id} alert={a} action={action} api={api} metrics={metrics} busy={busy} onOpenMetric={openMetric} crewName={member.name} practice={!!practiceId} />)}
+            {followUps.filter((f) => !isOpenFollowUp(f)).map((f) => <FollowUp key={f.action_id} follow={f} alert={alerts.find((a) => a.alert_id === f.alert_id)} action={action} api={api} metrics={metrics} busy={busy} onMeasure={openMeasurement} />)}
+          </details>}
         </section>}
 
 
@@ -397,8 +596,12 @@ function CrewWorkspace({ member, crew, active, setActive, selectCrew, addCrew, r
   );
 }
 
-function MetricCard({ label, value, hint, icon, tone }: any) {
-  return <div className={`metric-card ${tone || ""}`}><div className="metric-card-label"><p>{label}</p>{icon}</div><strong>{value}</strong><span>{hint}</span></div>;
+function MetricCard({ label, value, hint, icon, tone, onClick }: {
+  label: string; value: string | number; hint: string; icon: React.ReactNode; tone?: string; onClick?: () => void;
+}) {
+  const className = `metric-card ${tone || ""}`;
+  const content = <><span className="metric-card-label"><span>{label}</span>{icon}</span><strong>{value}</strong><span className="metric-card-hint">{hint}</span></>;
+  return onClick ? <button type="button" className={className} onClick={onClick}>{content}</button> : <div className={className}>{content}</div>;
 }
 
 function MissionHero({ summary, activeAlerts, latest, onNavigate, onOpenMetric }: any) {
@@ -520,8 +723,8 @@ function LatestReadings({ latest, metrics }: any) {
   </section>;
 }
 
-function Panel({ title, children }: any) {
-  return <div className="panel"><h2>{title}</h2>{children}</div>;
+function Panel({ title, children, headingId }: any) {
+  return <div className="panel"><h2 id={headingId} tabIndex={headingId ? -1 : undefined}>{title}</h2>{children}</div>;
 }
 
 function DeleteCrewDialog({ name, busy, error, onCancel, onConfirm }: {
@@ -567,8 +770,9 @@ function ImportResult({ result, imported }: any) {
   </div>;
 }
 
-function HealthTimeline({ metrics, revision, api, initialMetric }: any) {
+function HealthTimeline({ metrics, revision, api, initialMetric, initialQuality }: any) {
   const [metric, setMetric] = useState(initialMetric || "heart_rate");
+  const allMetrics = metric === "all";
   const chartHeading = useRef<HTMLHeadingElement>(null);
   useEffect(() => {
     if (initialMetric) chartHeading.current?.focus({ preventScroll: true });
@@ -580,7 +784,7 @@ function HealthTimeline({ metrics, revision, api, initialMetric }: any) {
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
   const [source, setSource] = useState("all");
-  const [quality, setQuality] = useState("all");
+  const [quality, setQuality] = useState(initialQuality);
   const [style, setStyle] = useState("line");
   const [page, setPage] = useState(0);
   useEffect(() => {
@@ -588,11 +792,13 @@ function HealthTimeline({ metrics, revision, api, initialMetric }: any) {
     setLoading(true);
     setError("");
     setRows([]);
-    api(`/api/measurements?metric=${encodeURIComponent(metric)}&limit=all`).then((result: Measurement[]) => {
+    const query = new URLSearchParams({ limit: "all" });
+    if (!allMetrics) query.set("metric", metric);
+    api(`/api/measurements?${query}`).then((result: Measurement[]) => {
       if (!cancelled) setRows(result);
     }).catch((err) => { if (!cancelled) setError(err.message || "Could not load readings"); }).finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [metric, revision, retry]);
+  }, [metric, allMetrics, api, revision, retry]);
   useEffect(() => { setPage(0); }, [metric, start, end, source, quality, rows]);
   const invalidRange = !!start && !!end && start > end;
   const filtered = useMemo(() => {
@@ -601,9 +807,10 @@ function HealthTimeline({ metrics, revision, api, initialMetric }: any) {
     const until = end ? new Date(`${end}T23:59:59.999`).getTime() : Infinity;
     return rows.filter((row) => {
       const time = new Date(row.measured_at).getTime();
-      return Number.isFinite(time) && Number.isFinite(row.value) && time >= from && time <= until && (source === "all" || row.source === source) && (quality === "all" || row.quality_status === quality);
+      const matchesQuality = quality === "warnings" ? row.quality_status !== "valid" : quality === "all" || row.quality_status === quality;
+      return time >= from && time <= until && (allMetrics || Number.isFinite(row.value)) && (source === "all" || row.source === source) && matchesQuality;
     }).sort((a, b) => new Date(a.measured_at).getTime() - new Date(b.measured_at).getTime());
-  }, [rows, start, end, source, quality, invalidRange]);
+  }, [rows, start, end, source, quality, invalidRange, allMetrics]);
   const points = filtered.map((row) => ({ ...row, timestamp: new Date(row.measured_at).getTime() }));
   const config = metrics[metric] || {};
   const unit = displayUnit(config.unit || "");
@@ -620,23 +827,23 @@ function HealthTimeline({ metrics, revision, api, initialMetric }: any) {
     <Tooltip content={<ReadingTooltip label={config.label} unit={unit} />} />
   </>;
   return <div className="timeline-review">
-    <h2 ref={chartHeading} tabIndex={-1}>Health graphs</h2>
+    <h2 ref={chartHeading} tabIndex={-1}>{allMetrics ? "Review readings" : "Health graphs"}</h2>
     <div className="graph-controls">
-      <label>Health metric<select aria-label="Health metric" value={metric} onChange={(event) => { setMetric(event.target.value); setSource("all"); }}>{Object.entries(metrics).map(([key, value]: any) => <option key={key} value={key}>{value.label}</option>)}</select></label>
+      <label>Health metric<select aria-label="Health metric" value={metric} onChange={(event) => { setMetric(event.target.value); setSource("all"); }}><option value="all">All metrics</option>{Object.entries(metrics).map(([key, value]: any) => <option key={key} value={key}>{value.label}</option>)}</select></label>
       <label>From<input type="date" value={start} max={end || undefined} onInput={(event) => setStart(event.currentTarget.value)} onChange={(event) => setStart(event.target.value)} /></label>
       <label>To<input type="date" value={end} min={start || undefined} onInput={(event) => setEnd(event.currentTarget.value)} onChange={(event) => setEnd(event.target.value)} /></label>
       <label>Source<select aria-label="Source" value={source} onChange={(event) => setSource(event.target.value)}><option value="all">All sources</option>{sources.map((value) => <option key={value} value={value}>{value.replaceAll("_", " ")}</option>)}</select></label>
-      <label>Quality<select aria-label="Quality" value={quality} onChange={(event) => setQuality(event.target.value)}><option value="all">All records</option><option value="valid">Valid</option><option value="questionable">Questionable</option><option value="invalid">Invalid</option></select></label>
-      <label>Graph<select aria-label="Graph type" value={style} onChange={(event) => setStyle(event.target.value)}><option value="line">Line</option><option value="bar">Bar</option></select></label>
-      <button title="Reset graph filters" aria-label="Reset graph filters" onClick={() => { setStart(""); setEnd(""); setSource("all"); setQuality("all"); }}><RefreshCw size={16} /></button>
+      <label>Quality<select aria-label="Quality" value={quality} onChange={(event) => setQuality(event.target.value)}><option value="all">All records</option><option value="warnings">Quality warnings</option><option value="valid">Valid</option><option value="questionable">Questionable</option><option value="invalid">Invalid</option></select></label>
+      {!allMetrics && <label>Graph<select aria-label="Graph type" value={style} onChange={(event) => setStyle(event.target.value)}><option value="line">Line</option><option value="bar">Bar</option></select></label>}
+      <button title="Reset filters" aria-label="Reset filters" onClick={() => { setStart(""); setEnd(""); setSource("all"); setQuality("all"); }}><RefreshCw size={16} /></button>
     </div>
-    <div className="graph-heading"><h3>{config.label} <span>({unit})</span></h3><span>{Intl.DateTimeFormat().resolvedOptions().timeZone}</span></div>
     {invalidRange && <p role="alert" className="reading-warning">The start date must be on or before the end date.</p>}
-    <div className="health-graph" aria-label={`${config.label} graph`} aria-busy={loading}>
-      {loading ? <p role="status">Loading readings...</p> : error ? <div role="alert"><p>{error}</p><button onClick={() => setRetry(retry + 1)}><RefreshCw size={16} /> Retry</button></div> : !points.length ? <p>No readings for this metric and date range.</p> : <ResponsiveContainer width="100%" height="100%">{style === "line" ? <LineChart {...chartProps}>{axes}<Line type="linear" dataKey="value" name={config.label} stroke="#60c7d0" strokeWidth={2} isAnimationActive={false} dot={(props: any) => <circle key={props.payload.measurement_id} cx={props.cx} cy={props.cy} r={3} fill={props.payload.quality_status !== "valid" || props.payload.quality_flags?.length ? "#ffd166" : "#60c7d0"} />} /></LineChart> : <BarChart {...chartProps}>{axes}<Bar dataKey="value" name={config.label} fill="#60c7d0" maxBarSize={32} isAnimationActive={false} /></BarChart>}</ResponsiveContainer>}
+    {!allMetrics && <div className="graph-heading"><h3>{config.label} <span>({unit})</span></h3><span>{Intl.DateTimeFormat().resolvedOptions().timeZone}</span></div>}
+    <div className={allMetrics ? undefined : "health-graph"} aria-label={allMetrics ? undefined : `${config.label} graph`} aria-busy={loading}>
+      {loading ? <p role="status">Loading readings...</p> : error ? <div role="alert"><p>{error}</p><button onClick={() => setRetry(retry + 1)}><RefreshCw size={16} /> Retry</button></div> : !filtered.length ? <p>No readings match these filters.</p> : !allMetrics && <ResponsiveContainer width="100%" height="100%">{style === "line" ? <LineChart {...chartProps}>{axes}<Line type="linear" dataKey="value" name={config.label} stroke="#60c7d0" strokeWidth={2} isAnimationActive={false} dot={(props: any) => <circle key={props.payload.measurement_id} cx={props.cx} cy={props.cy} r={3} fill={props.payload.quality_status !== "valid" || props.payload.quality_flags?.length ? "#ffd166" : "#60c7d0"} />} /></LineChart> : <BarChart {...chartProps}>{axes}<Bar dataKey="value" name={config.label} fill="#60c7d0" maxBarSize={32} isAnimationActive={false} /></BarChart>}</ResponsiveContainer>}
     </div>
     {!loading && !error && <>
-      <dl className="graph-summary"><div><dt>Readings</dt><dd>{filtered.length}</dd></div><div><dt>Latest</dt><dd>{filtered.at(-1)?.value ?? "--"} {unit}</dd></div><div><dt>Average</dt><dd>{average === null ? "--" : format(average)} {unit}</dd></div><div><dt>Flagged</dt><dd>{flagged}</dd></div></dl>
+      {!allMetrics && <dl className="graph-summary"><div><dt>Readings</dt><dd>{filtered.length}</dd></div><div><dt>Latest</dt><dd>{filtered.at(-1)?.value ?? "--"} {unit}</dd></div><div><dt>Average</dt><dd>{average === null ? "--" : format(average)} {unit}</dd></div><div><dt>Flagged</dt><dd>{flagged}</dd></div></dl>}
       <MeasurementTable rows={[...filtered].reverse().slice(currentPage * 50, (currentPage + 1) * 50)} />
       <div className="record-pagination"><button aria-label="Previous records" title="Previous records" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}><ChevronLeft size={16} /></button><span>Page {currentPage + 1} of {lastPage + 1} · {filtered.length} records</span><button aria-label="Next records" title="Next records" disabled={currentPage >= lastPage} onClick={() => setPage(currentPage + 1)}><ChevronRight size={16} /></button></div>
     </>}
@@ -672,13 +879,227 @@ function Finding({ finding }: { finding?: Investigation }) {
   return <div className="incident"><h3 className={finding.severity}>{finding.title}</h3><p>{finding.explanation}</p><div>{finding.evidence?.map((e: any) => <span className="pill" key={e.measurement_id}>{e.metric_type}: {e.value} vs {e.bound}</span>)}</div>{!!finding.quality_limitations?.length && <p className="muted">{finding.quality_limitations.length} quality-limited record(s) excluded.</p>}{!!finding.missing_metrics?.length && <p className="reading-warning">No usable recent reading: {finding.missing_metrics.map((m) => m.replaceAll("_", " ")).join(", ")}.</p>}{!!finding.insufficient_baselines?.length && <p className="reading-warning">Baseline not established: {finding.insufficient_baselines.map((m) => m.replaceAll("_", " ")).join(", ")}.</p>}</div>;
 }
 
-function AlertCard({ alert, action, api }: { alert: Alert; action: any; api: typeof request }) {
-  const update = (endpoint: string, payload?: any, label = "Alert updated") => action(() => api(`/api/alerts/${alert.alert_id}/${endpoint}`, post(payload || {})), label);
-  return <div className="incident"><h3 className={alert.severity}>{alert.title}</h3><p>{alert.explanation}</p><p><span className="pill">{alert.severity}</span><span className="pill">{alert.status}</span></p><Checklist items={(alert as any).response_checklist} /><div className="toolbar"><button onClick={() => update("acknowledge", { user: "demo-user" })}>Acknowledge</button><button onClick={() => update("investigate")}>Investigate</button><button onClick={() => action(() => api("/api/follow-ups", post({ alert_id: alert.alert_id, description: "Collect recovery measurements and review linked alert evidence." })), "Follow-up created")}>Create Follow-up</button><button onClick={() => update("resolve", { resolution_notes: prompt("Resolution note required") || "" }, "Alert resolved")}>Resolve</button></div></div>;
+function InvestigationResult({ finding, alert, metrics, onOpenMetric, onMeasure, onOpenAlert, onPlan }: {
+  finding: Investigation; alert?: Alert; metrics: any;
+  onOpenMetric?: (metric: string) => void; onMeasure?: (metric: string) => void; onOpenAlert?: (id: string) => void;
+  onPlan?: (id: string) => void;
+}) {
+  const missing = finding.missing_metrics || [];
+  const insufficient = finding.insufficient_baselines || [];
+  const gaps = [...new Set([...missing, ...insufficient])];
+  const evidence = finding.evidence || [];
+  const checks = finding.signal_checks;
+  const compared = checks?.filter((row) => row.result !== "insufficient_data").length ?? 0;
+  const excluded = finding.quality_limitations || [];
+  let title = finding.title;
+  if (checks && !compared) title = "Insufficient data for comparison";
+  else if (checks && !evidence.length) title = "No drift flagged in this window";
+  else if (evidence.length === 2) title = "Two signals flagged";
+  return <div className="investigation-result">
+    <h3 className={finding.severity}>{title}</h3>
+    {checks && !compared ? <p>ORBIT needs both a usable reading in this window and an established baseline for the same signal.</p> :
+      <p>{evidence.length === 2 ? "Two signals crossed their baseline bounds. ORBIT’s combined-alert rule requires at least three." : finding.explanation}</p>}
+    {finding.window_start && finding.as_of && <p className="muted">Window · {new Date(finding.window_start).toLocaleString()} to {new Date(finding.as_of).toLocaleString()}</p>}
+    {checks && <>
+      <p><strong>{compared} of {checks.length} signals compared</strong> · {evidence.length} flagged · {checks.length - compared} with data gaps</p>
+      <div className="table-wrap"><table>
+        <thead><tr><th>Signal</th><th>Reading in window</th><th>Baseline</th><th>Result</th>{onOpenMetric && <th>History</th>}</tr></thead>
+        <tbody>{checks.map((row) => {
+          const unit = displayUnit(metrics[row.metric_type]?.unit || "");
+          return <tr key={row.metric_type}>
+            <th scope="row">{labelFor(row.metric_type, metrics)}</th>
+            <td>{row.value === null ? "No usable reading" : <>{row.value} {unit}<small className="record-flags">{row.measured_at && new Date(row.measured_at).toLocaleString()}</small></>}</td>
+            <td>{row.baseline_mean === null ? "Insufficient history" : <>Mean {format(row.baseline_mean)} {unit}<small className="record-flags">{row.direction === "low" ? "Lower" : "Upper"} bound {format(row.bound)}</small></>}
+              <small className="record-flags">{row.baseline_samples} usable sample(s){row.baseline_samples_required != null && row.baseline_mean === null && ` · ${Math.max(0, row.baseline_samples_required - row.baseline_samples)} more needed`}</small></td>
+            <td>{row.result === "flagged" ? "Flagged" : row.result === "clear" ? "No drift flagged" : "Could not compare"}</td>
+            {onOpenMetric && <td><button onClick={() => onOpenMetric(row.metric_type)}>View chart</button></td>}
+          </tr>;
+        })}</tbody>
+      </table></div>
+    </>}
+    {!checks && evidence.length > 0 && <div className="table-wrap"><table>
+      <thead><tr><th>Signal</th><th>Latest reading</th><th>Baseline mean</th><th>Baseline bound</th><th>History</th></tr></thead>
+      <tbody>{evidence.map((row) => <tr key={row.measurement_id}>
+        <th scope="row">{labelFor(row.metric_type, metrics)}</th>
+        <td>{row.value} {displayUnit(metrics[row.metric_type]?.unit || "")}</td>
+        <td>{row.baseline_mean ?? "—"}</td>
+        <td>{row.direction === "low" ? "Lower" : "Upper"} · {row.bound}</td>
+        <td><button onClick={() => onOpenMetric(row.metric_type)}>View chart</button></td>
+      </tr>)}</tbody>
+    </table></div>}
+    {excluded.length > 0 && <details>
+      <summary>{excluded.length} recent reading(s) excluded by quality checks</summary>
+      <ul className="checklist">{excluded.map((row) => <li key={row.measurement_id}>
+        {labelFor(row.metric_type, metrics)} · {(row.flags || []).map((flag: string) => flag.replaceAll("_", " ")).join(", ") || "Quality check failed"}
+        {onMeasure && Object.hasOwn(metrics, row.metric_type) && <button onClick={() => onMeasure(row.metric_type)}>Record again</button>}
+      </li>)}</ul>
+    </details>}
+    {gaps.length > 0 && <details open={!evidence.length}>
+      <summary>Data gaps ({gaps.length})</summary>
+      <ul className="checklist">{gaps.map((metric) => <li key={metric}>
+        <strong>{labelFor(metric, metrics)}</strong> · {[missing.includes(metric) && "No usable reading in this window", insufficient.includes(metric) && "Needs more baseline readings"].filter(Boolean).join(" · ")}
+        {onMeasure && Object.hasOwn(metrics, metric) && <button onClick={() => onMeasure(metric)}>Record reading</button>}
+      </li>)}</ul>
+    </details>}
+    {alert && onOpenAlert ? <div className="toolbar">
+      <button onClick={() => onOpenAlert(alert.alert_id)}>Open linked alert</button>
+      {onPlan && !["RESOLVED", "FALSE_POSITIVE"].includes(alert.status) && <button className="primary" onClick={() => onPlan(alert.alert_id)}>Plan follow-up</button>}
+    </div> :
+      onMeasure && <p className="muted">{evidence.length ? "Review the flagged readings in their charts." : gaps.length ? "Collect the missing readings and rerun the investigation when more history is available." : "No new alert was created for this window."}</p>}
+  </div>;
 }
 
-function FollowUp({ follow, action, api }: any) {
-  return <div className="incident"><strong>{follow.description}</strong><p>{follow.assigned_to} · <span className="pill">{follow.status}</span></p>{follow.status !== "COMPLETED" && <button onClick={() => action(() => api(`/api/follow-ups/${follow.action_id}`, { ...post({ status: "COMPLETED", completion_notes: "Completed in demonstration workflow." }), method: "PATCH" }), "Follow-up completed; alert still needs review")}>Complete</button>}</div>;
+function AlertCard({ alert, action, api, metrics, busy, onOpenMetric, crewName, practice, startPlanning = false }: {
+  alert: Alert; action: any; api: typeof request; metrics: any; busy: boolean; onOpenMetric: (metric: string) => void;
+  crewName: string; practice: boolean; startPlanning?: boolean;
+}) {
+  const [planning, setPlanning] = useState(startPlanning);
+  const evidenceMetrics = [...new Set<string>((alert.evidence_summary || []).map((item) => item.metric_type))]
+    .filter((metric) => Object.hasOwn(metrics, metric));
+  const closed = ["RESOLVED", "FALSE_POSITIVE"].includes(alert.status);
+  const update = (endpoint: string, payload?: any, label = "Alert updated") => action(() => api(`/api/alerts/${alert.alert_id}/${endpoint}`, post(payload || {})), label);
+  return <div className="incident" id={`alert-${alert.alert_id}`} tabIndex={-1}>
+    <h3 className={alert.severity}>{alert.title}</h3>
+    <p>{alert.explanation}</p>
+    <p><span className="pill">{alert.severity}</span><span className="pill">{alert.status}</span></p>
+    <GroundReview alert={alert} api={api} metrics={metrics} crewName={crewName} practice={practice} />
+    {evidenceMetrics.length > 0 && <div className="toolbar">{evidenceMetrics.map((metric) =>
+      <button key={metric} onClick={() => onOpenMetric(metric)}>View {metrics[metric].label}</button>
+    )}</div>}
+    {!closed && <>
+      <ol className="checklist">
+        <li>Review the readings, timestamps, and quality flags in the timeline.</li>
+        <li>Document the measurement context and assign any repeat reading or review to the responsible crew member.</li>
+        <li>Record the outcome, then review the alert before resolving it.</li>
+        {alert.severity === "HIGH" && <li>Use the mission’s established escalation procedure for high-priority findings.</li>}
+      </ol>
+      <div className="toolbar">
+        {alert.status === "NEW" && <button disabled={busy} onClick={() => update("acknowledge", { user: "demo-user" })}>Acknowledge</button>}
+        {alert.status !== "INVESTIGATING" && <button disabled={busy} onClick={() => update("investigate")}>Investigate</button>}
+        <button disabled={busy} aria-expanded={planning} onClick={() => setPlanning(!planning)}>Plan follow-up</button>
+        <button disabled={busy} onClick={() => {
+          const notes = prompt("Enter the alert review outcome")?.trim();
+          if (notes) update("resolve", { resolution_notes: notes }, "Alert resolved");
+        }}>Resolve</button>
+      </div>
+      {planning && <form className="guidance-form" onSubmit={(event) => {
+        event.preventDefault();
+        const fields = new FormData(event.currentTarget);
+        const due = String(fields.get("due"));
+        action(async () => {
+          await api("/api/follow-ups", post({
+            alert_id: alert.alert_id,
+            metric_type: fields.get("metric") || undefined,
+            description: String(fields.get("description")).trim(),
+            assigned_to: String(fields.get("owner")).trim(),
+            due_at: due ? new Date(due).toISOString() : null
+          }));
+          setPlanning(false);
+        }, "Follow-up created");
+      }}>
+        <label>Task<textarea name="description" required maxLength={500} placeholder="Describe the reading or review to complete" /></label>
+        <label>Assigned to<input name="owner" required maxLength={80} defaultValue="Mission Health Officer" /></label>
+        <label>Due time (optional)<input name="due" type="datetime-local" /></label>
+        <label>Repeat measurement (optional)<select name="metric" defaultValue={evidenceMetrics[0] || ""}><option value="">Review only</option>{evidenceMetrics.map((metric) => <option key={metric} value={metric}>{metrics[metric].label}</option>)}</select></label>
+        <button disabled={busy}>Save follow-up</button>
+      </form>}
+    </>}
+  </div>;
+}
+
+function GroundReview({ alert, api, metrics, crewName, practice }: {
+  alert: Alert; api: typeof request; metrics: any; crewName: string; practice: boolean;
+}) {
+  const [brief, setBrief] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const textArea = useRef<HTMLTextAreaElement>(null);
+  const readingText = (reading: Measurement) =>
+    `${reading.value} ${displayUnit(reading.unit)} at ${reading.measured_at} (${[reading.source, reading.quality_status, ...(reading.quality_flags || [])].map((part) => part.replaceAll("_", " ")).join(", ")})`;
+  const prepare = async () => {
+    setBusy(true);
+    setMessage("");
+    try {
+      const data = await api(`/api/alerts/${alert.alert_id}/brief`);
+      setBrief([
+        practice ? "ORBIT practice summary • Simulated data" : "ORBIT ground review summary",
+        `Crew member · ${crewName}`,
+        `Alert · ${alert.title} (${alert.severity}, ${alert.status})`,
+        `Observation window (UTC) · ${data.window_start || "Unavailable"} to ${data.as_of || "Unavailable"}`,
+        "",
+        "Flagged readings",
+        ...data.readings.map((row) => `• ${labelFor(row.metric_type, metrics)} · ${row.reading ? readingText(row.reading) : row.value} · Baseline mean ${row.baseline_mean ?? "unavailable"}, ${row.direction === "low" ? "lower" : "upper"} bound ${row.bound}`),
+        "",
+        "Quality exclusions",
+        ...(data.excluded.length ? data.excluded.map((row) => `• ${labelFor(row.metric_type, metrics)} · ${(row.flags || []).map((flag) => flag.replaceAll("_", " ")).join(", ") || "Quality check failed"}`) : ["None recorded"]),
+        "",
+        "Symptoms and measurement context",
+        ...(data.symptoms ? [`Symptom severity · ${readingText(data.symptoms)}`] : []),
+        ...(data.context.length ? data.context : ["No context notes recorded in the window"]),
+        "",
+        "Follow-ups",
+        ...(data.tasks.length ? data.tasks.map((task: FollowUpRecord) => [
+          `• ${task.description} · ${task.assigned_to} · ${task.status}`,
+          task.due_at && `Due (UTC) · ${task.due_at}`,
+          task.measurement && `Repeat reading · ${readingText(task.measurement)}`,
+          task.measurement?.notes && `Reading notes · ${task.measurement.notes}`,
+          task.completion_notes && `Outcome · ${task.completion_notes}`
+        ].filter(Boolean).join("\n")) : ["None recorded"]),
+        ...(data.resolution ? ["", `Resolution · ${data.resolution}`] : [])
+      ].join("\n"));
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return <div className="ground-review">
+    <button disabled={busy} onClick={prepare}>{brief ? "Refresh ground review summary" : "Prepare ground review summary"}</button>
+    {brief && <div className="guidance-form">
+      <label>Ground review summary<textarea ref={textArea} readOnly rows={10} value={brief} /></label>
+      <button onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(brief);
+          setMessage("Summary copied.");
+        } catch {
+          textArea.current?.focus();
+          textArea.current?.select();
+          setMessage("Summary selected. Use your device’s copy command.");
+        }
+      }}>Copy summary</button>
+    </div>}
+    {message && <p role="status">{message}</p>}
+  </div>;
+}
+
+function FollowUp({ follow, alert, action, api, metrics, busy, onMeasure }: {
+  follow: FollowUpRecord; alert?: Alert; action: any; api: typeof request; metrics: any;
+  busy: boolean; onMeasure: (metric: string, task: FollowUpRecord) => void;
+}) {
+  const [notes, setNotes] = useState("");
+  const closed = ["COMPLETED", "CANCELLED"].includes(follow.status);
+  const metric = follow.metric_type;
+  return <div className="incident" id={`follow-up-${follow.action_id}`} tabIndex={-1}>
+    <strong>{follow.description}</strong>
+    {alert && <p className="muted">Alert · {alert.title}</p>}
+    <p>{follow.assigned_to} · <span className="pill">{follow.status}</span></p>
+    {follow.due_at && <p className={!closed && dueTime(follow) < Date.now() ? "reading-warning" : undefined}>
+      {!closed && dueTime(follow) < Date.now() ? "Overdue" : "Due"} · <time dateTime={follow.due_at}>{new Date(follow.due_at).toLocaleString()}</time>
+    </p>}
+    {follow.measurement && <p><strong>Linked reading</strong> · {follow.measurement.value} {displayUnit(follow.measurement.unit)} · {new Date(follow.measurement.measured_at).toLocaleString()} · {follow.measurement.quality_status}</p>}
+    {closed ? (follow.completion_notes && <p>{follow.completion_notes}</p>) : <>
+      {metric && metrics[metric] && <button disabled={busy} onClick={() => onMeasure(metric, follow)}>{follow.measurement ? "Record another" : "Record"} {metrics[metric].label}</button>}
+      <form className="guidance-form" onSubmit={(event) => {
+        event.preventDefault();
+        action(() => api(`/api/follow-ups/${follow.action_id}`, {
+          ...post({ status: "COMPLETED", completion_notes: notes.trim() }), method: "PATCH"
+        }), "Follow-up completed. Review the linked alert separately.");
+      }}>
+        <label>Outcome<textarea required maxLength={1000} value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Record what was checked, the result, and any next action" /></label>
+        <button disabled={busy || !notes.trim()}>Complete follow-up</button>
+      </form>
+    </>}
+  </div>;
 }
 
 function BaselineTable({ rows, metrics = {} }: any) {
@@ -697,10 +1118,6 @@ function OfflineCard({ latest }: { latest: string }) {
   return <div className="offline-card"><WifiOff /><div><h3>Local-first demonstration</h3><p>Stored records remain available from the local database, and deterministic rules run without external AI or internet access.</p><span className="pill">Last telemetry: {latest ? new Date(latest).toLocaleString() : "No data yet"}</span><span className="pill">External sync: prototype placeholder</span></div></div>;
 }
 
-function Checklist({ items }: { items?: string[] }) {
-  const list = items?.length ? items : ["Verify evidence.", "Record action.", "Collect follow-up measurement."];
-  return <ul className="checklist">{list.map((item) => <li key={item}>{item}</li>)}</ul>;
-}
 
 function labelFor(name: string, metrics: any) {
   return metrics[name]?.label || name.replaceAll("_", " ");

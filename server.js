@@ -33,7 +33,17 @@ const DB_PATH = path.join(DATA_DIR, "orbit-db.json");
 const PORT = Number(process.env.PORT || 4173);
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
-let state = loadState();
+let liveState = loadState();
+const practiceSessions = new Map();
+
+function createPractice() {
+  const state = initialState();
+  state.crew[0].name = "Practice Crew Member";
+  generateScenario(state, { scenario: "stable_baseline", days: 12, seed: 21 });
+  generateScenario(state, { scenario: "gradual_drift", days: 10, seed: 22 });
+  runInvestigation(state);
+  return state;
+}
 
 function loadState() {
   if (!fs.existsSync(DB_PATH)) return initialState();
@@ -44,7 +54,7 @@ function loadState() {
   }
 }
 
-function saveState(next = state) {
+function saveState(next = liveState) {
   const temporary = `${DB_PATH}.${randomUUID()}.tmp`;
   try {
     fs.writeFileSync(temporary, JSON.stringify(next, null, 2));
@@ -95,7 +105,7 @@ function safe(handler) {
       const url = new URL(req.url, `http://${req.headers.host}`);
       await handler(req, res, url);
       if (req.method !== "GET" && req.method !== "OPTIONS" && req.method !== "DELETE" &&
-          url.pathname !== "/api/crew") saveState();
+          url.pathname !== "/api/crew" && url.pathname !== "/api/practice" && !url.searchParams.has("practice")) saveState();
     } catch (err) {
       if (res.headersSent) res.destroy();
       else send(res, err.status || 500, { error: err.message || "Unexpected error" });
@@ -109,6 +119,30 @@ const server = http.createServer(safe(async (req, res, url) => {
   if (!url.pathname.startsWith("/api/")) {
     return serveStatic(req, res, url.pathname);
   }
+  const practiceId = url.searchParams.get("practice");
+  if (url.pathname === "/api/practice") {
+    if (req.method === "POST") {
+      for (const [id, session] of practiceSessions) {
+        if (session.expires < Date.now()) practiceSessions.delete(id);
+      }
+      if (practiceSessions.size >= 20) return send(res, 409, { error: "Too many practice sessions are open." });
+      const id = randomUUID();
+      const state = createPractice();
+      practiceSessions.set(id, { state, expires: Date.now() + 3600000 });
+      return send(res, 201, { id, member: state.crew[0] });
+    }
+    if (req.method === "DELETE") {
+      practiceSessions.delete(practiceId);
+      return send(res, 200, { ended: true });
+    }
+    return notFound(res);
+  }
+  const practice = practiceSessions.get(practiceId);
+  if (url.searchParams.has("practice") && (!practice || practice.expires < Date.now())) {
+    return send(res, 404, { error: "Practice session expired. Exit practice and start a new session." });
+  }
+  if (practice && req.method !== "GET" && (url.pathname.startsWith("/api/crew") || url.pathname === "/api/mission")) return notFound(res);
+  const state = practice?.state ?? liveState;
 
   if (req.method === "GET" && url.pathname === "/api/health") return send(res, 200, { ok: true, app: "ORBIT", persistence: DB_PATH });
   if (req.method === "GET" && url.pathname === "/api/config") return send(res, 200, { metrics: METRICS, ai_enabled: process.env.AI_ENABLED === "true", model: process.env.GEMINI_MODEL || "not configured" });
@@ -127,7 +161,7 @@ const server = http.createServer(safe(async (req, res, url) => {
     const member = { crew_id: `crew-${randomUUID()}`, name, role: role || "Crew member", fictional: true };
     const next = { ...state, crew: [...state.crew, member] };
     saveState(next);
-    state = next;
+    liveState = next;
     return send(res, 201, member);
   }
   const crewRoute = url.pathname.match(/^\/api\/crew\/([^/]+)$/);
@@ -139,7 +173,7 @@ const server = http.createServer(safe(async (req, res, url) => {
       if (activeCrew.length === 1) return send(res, 409, { error: "Keep at least one active crew profile." });
       const next = { ...state, crew: state.crew.map((row) => row === profile ? { ...row, deleted_at: new Date().toISOString() } : row) };
       saveState(next);
-      state = next;
+      liveState = next;
       return send(res, 200, next.crew.filter((row) => !row.deleted_at));
     }
   }
@@ -167,8 +201,14 @@ const server = http.createServer(safe(async (req, res, url) => {
     const input = await body(req);
     const target = input.crew_id ?? crewId;
     if ((requestedCrew !== null && target !== crewId) || !state.crew.some((row) => row.crew_id === target && !row.deleted_at)) return send(res, 400, { error: "Measurement crew ID must match an active crew member and the selected profile." });
+    const followUp = input.follow_up_id && state.followUps.find((row) =>
+      row.action_id === input.follow_up_id && target === crewId && ownsFollowUp(row));
+    if (input.follow_up_id && (!followUp || ["COMPLETED", "CANCELLED"].includes(followUp.status) || followUp.metric_type !== input.metric_type)) {
+      return send(res, 409, { error: "This measurement does not match an open follow-up for the selected crew member." });
+    }
     const measurement = createMeasurement({ ...input, crew_id: target }, state);
     state.measurements.push(measurement);
+    if (followUp) followUp.measurement_id = measurement.measurement_id;
     return send(res, 201, measurement);
   }
   if (req.method === "GET" && url.pathname.startsWith("/api/measurements/")) return send(res, 200, state.measurements.find((m) => owned(m) && m.measurement_id === url.pathname.split("/").at(-1)) || {});
@@ -201,10 +241,34 @@ const server = http.createServer(safe(async (req, res, url) => {
   if (req.method === "POST" && url.pathname === "/api/simulator/reset") return send(res, 200, clearDemoData(state, crewId));
 
   if (req.method === "POST" && url.pathname === "/api/investigations/run") return send(res, 201, runInvestigation(state, crewId));
+  if (req.method === "GET" && url.pathname === "/api/investigations/demo") {
+    return send(res, 200, { ...createPractice().investigations[0], crew_id: crewId });
+  }
   if (req.method === "GET" && url.pathname === "/api/investigations") return send(res, 200, state.investigations.filter(owned));
   if (req.method === "GET" && url.pathname.startsWith("/api/investigations/")) return send(res, 200, state.investigations.find((i) => owned(i) && i.investigation_id === url.pathname.split("/").at(-1)) || {});
 
   if (req.method === "GET" && url.pathname === "/api/alerts") return send(res, 200, state.alerts.filter(owned));
+  const briefRoute = url.pathname.match(/^\/api\/alerts\/([^/]+)\/brief$/);
+  if (req.method === "GET" && briefRoute) {
+    const alert = state.alerts.find((row) => row.alert_id === briefRoute[1] && owned(row));
+    if (!alert) return notFound(res);
+    const finding = state.investigations.find((row) => owned(row) && (row.alert_id === alert.alert_id || row.investigation_id === alert.investigation_id));
+    const measurements = state.measurements.filter(owned);
+    const byId = new Map(measurements.map((row) => [row.measurement_id, row]));
+    const withinWindow = (row) => finding?.window_start && finding?.as_of &&
+      Date.parse(row.measured_at) >= Date.parse(finding.window_start) && Date.parse(row.measured_at) <= Date.parse(finding.as_of);
+    return send(res, 200, {
+      window_start: finding?.window_start,
+      as_of: finding?.as_of,
+      excluded: finding?.quality_limitations ?? [],
+      readings: (alert.evidence_summary || []).map((row) => ({ ...row, reading: byId.get(row.measurement_id) })),
+      symptoms: measurements.filter((row) => withinWindow(row) && row.metric_type === "symptom_severity" && !row.scenario_id)
+        .sort((a, b) => Date.parse(b.measured_at) - Date.parse(a.measured_at))[0] ?? null,
+      context: [...new Set(measurements.filter((row) => withinWindow(row) && row.notes && !row.scenario_id).map((row) => row.notes))],
+      tasks: state.followUps.filter((row) => row.alert_id === alert.alert_id).map((row) => ({ ...row, measurement: byId.get(row.measurement_id) })),
+      resolution: alert.resolution_notes
+    });
+  }
   if (req.method === "GET" && url.pathname.startsWith("/api/alerts/") && url.pathname.split("/").length === 4) return send(res, 200, state.alerts.find((a) => owned(a) && a.alert_id === url.pathname.split("/").at(-1)) || {});
   const alertAction = url.pathname.match(/^\/api\/alerts\/([^/]+)\/(acknowledge|investigate|resolve|false-positive)$/);
   if (req.method === "POST" && alertAction) {
@@ -213,7 +277,12 @@ const server = http.createServer(safe(async (req, res, url) => {
     return send(res, 200, transitionAlert(state, alertAction[1], alertAction[2], input));
   }
 
-  if (req.method === "GET" && url.pathname === "/api/follow-ups") return send(res, 200, state.followUps.filter(ownsFollowUp));
+  if (req.method === "GET" && url.pathname === "/api/follow-ups") {
+    return send(res, 200, state.followUps.filter(ownsFollowUp).map((row) => ({
+      ...row,
+      measurement: row.measurement_id ? state.measurements.find((item) => item.measurement_id === row.measurement_id && owned(item)) ?? null : null
+    })));
+  }
   if (req.method === "POST" && url.pathname === "/api/follow-ups") {
     const input = await body(req);
     if (!ownsAlert(input.alert_id)) return notFound(res);

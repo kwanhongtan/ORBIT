@@ -170,6 +170,7 @@ export function calculateBaselines(state, crewId = "crew-aurora", asOf = new Dat
       crew_id: crewId,
       metric_type: metricType,
       sample_count: count,
+      required_samples: minSamples,
       mean,
       median,
       stddev,
@@ -218,14 +219,27 @@ export function runInvestigation(state, crewId = "crew-aurora", asOf = null) {
   const missingMetrics = [];
   const insufficientBaselines = [];
   const evidence = [];
+  const signalChecks = [];
   for (const metric of ["heart_rate", "sleep_duration", "fatigue", "stress", "hydration", "blood_oxygen"]) {
     const latest = usable.filter((m) => m.metric_type === metric).sort((a, b) => new Date(b.measured_at) - new Date(a.measured_at))[0];
     const baseline = baselines.find((b) => b.metric_type === metric);
     if (!latest) missingMetrics.push(metric);
     if (!baseline?.sufficient) insufficientBaselines.push(metric);
-    if (!latest || !baseline?.sufficient) continue;
     const direction = metric === "sleep_duration" || metric === "hydration" || metric === "blood_oxygen" ? "low" : "high";
-    const deviates = direction === "high" ? latest.value > baseline.upper_bound : latest.value < baseline.lower_bound;
+    const bound = baseline?.sufficient ? (direction === "high" ? baseline.upper_bound : baseline.lower_bound) : null;
+    const compared = latest != null && bound != null;
+    const deviates = compared && (direction === "high" ? latest.value > bound : latest.value < bound);
+    signalChecks.push({
+      metric_type: metric,
+      value: latest?.value ?? null,
+      measured_at: latest?.measured_at ?? null,
+      baseline_mean: baseline?.sufficient ? baseline.mean : null,
+      baseline_samples: baseline?.sample_count ?? 0,
+      baseline_samples_required: baseline.required_samples,
+      bound,
+      direction,
+      result: compared ? (deviates ? "flagged" : "clear") : "insufficient_data"
+    });
     if (deviates) evidence.push({
       metric_type: metric,
       measurement_id: latest.measurement_id,
@@ -262,6 +276,7 @@ export function runInvestigation(state, crewId = "crew-aurora", asOf = null) {
     severity,
     explanation,
     evidence,
+    signal_checks: signalChecks,
     quality_limitations: qualityIssues.map((m) => ({ measurement_id: m.measurement_id, metric_type: m.metric_type, flags: m.quality_flags })),
     missing_metrics: missingMetrics,
     insufficient_baselines: insufficientBaselines,
@@ -271,7 +286,9 @@ export function runInvestigation(state, crewId = "crew-aurora", asOf = null) {
     created_at: nowIso()
   };
   state.investigations.unshift(investigation);
-  if (["MEDIUM", "HIGH"].includes(severity)) upsertAlertFromInvestigation(state, investigation);
+  if (["MEDIUM", "HIGH"].includes(severity)) {
+    investigation.alert_id = upsertAlertFromInvestigation(state, investigation).alert_id;
+  }
   audit(state, "investigation.run", investigation.investigation_id, severity);
   return investigation;
 }
@@ -316,12 +333,12 @@ function responseChecklist(severity) {
   const base = [
     "Verify the supporting measurements and quality flags.",
     "Record whether the crew member reports related symptoms or context.",
-    "Collect follow-up measurements after the configured review interval."
+    "Assign a follow-up and document any repeat reading or review."
   ];
   if (severity === "HIGH") {
     return [
       ...base,
-      "Escalate according to mission-approved medical communication protocol placeholder.",
+      "Use the mission’s established escalation procedure.",
       "Do not treat this software priority as an autonomous diagnosis."
     ];
   }
@@ -363,12 +380,19 @@ export function transitionAlert(state, alertId, action, body = {}) {
 export function createFollowUp(state, body) {
   const alert = state.alerts.find((a) => a.alert_id === body.alert_id);
   if (!alert) throw Object.assign(new Error("linked alert not found"), { status: 404 });
+  if (body.metric_type && !Object.hasOwn(METRICS, body.metric_type)) {
+    throw Object.assign(new Error("Unsupported follow-up metric"), { status: 400 });
+  }
+  if (body.due_at && (typeof body.due_at !== "string" || !Number.isFinite(Date.parse(body.due_at)))) {
+    throw Object.assign(new Error("Invalid follow-up due time"), { status: 400 });
+  }
   const action = {
     action_id: uid("follow"),
     alert_id: body.alert_id,
     description: body.description || "Review linked ORBIT alert and collect follow-up measurements.",
     assigned_to: body.assigned_to || "Mission Health Officer",
     due_at: body.due_at || null,
+    ...(body.metric_type ? { metric_type: body.metric_type } : {}),
     status: "PENDING",
     created_at: nowIso(),
     completion_at: null,
@@ -382,8 +406,12 @@ export function createFollowUp(state, body) {
 export function updateFollowUp(state, actionId, body) {
   const action = state.followUps.find((a) => a.action_id === actionId);
   if (!action) return null;
+  const notes = body.completion_notes === undefined ? action.completion_notes : body.completion_notes;
+  if (body.status === "COMPLETED" && (typeof notes !== "string" || !notes.trim())) {
+    throw Object.assign(new Error("Record the follow-up outcome before completing it."), { status: 400 });
+  }
   if (body.status) action.status = body.status;
-  if (body.completion_notes !== undefined) action.completion_notes = body.completion_notes;
+  if (body.completion_notes !== undefined) action.completion_notes = typeof notes === "string" ? notes.trim() : notes;
   if (body.status === "COMPLETED") action.completion_at = nowIso();
   audit(state, "followup.updated", action.action_id, action.status);
   return action;
