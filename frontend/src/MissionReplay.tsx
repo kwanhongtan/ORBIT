@@ -1,12 +1,14 @@
 import React, { useEffect, useState } from "react";
 import { ChevronLeft, ChevronRight, Pause, Play, RotateCcw } from "lucide-react";
 import { CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { readingContext, type Activity, type Environment } from "./readingContext";
 
-type Reading = { measurement_id: string; metric_type: string; value: number; unit: string; measured_at: string; source: string; quality_status: string; quality_flags: string[]; freshness?: string; timestamp?: number };
+type Reading = { measurement_id: string; metric_type: string; value: number; unit: string; measured_at: string; source: string; quality_status: string; quality_flags: string[]; freshness?: string; timestamp?: number; activity?: Activity; environment?: Environment };
 type Timeline = { timestamps: string[]; total_readings: number; start_at: string | null; end_at: string | null };
 type Snapshot = {
   as_of: string; metric: string; visible_count: number; remaining_count: number; latest_readings: Record<string, Reading>; trend: Reading[]; preview_alert_count: number;
   baselines: { baseline_id: string; metric_type: string; sample_count: number; mean: number | null; sufficient: boolean }[];
+  readings_at_time?: Reading[];
   finding: { severity: string; title: string; explanation: string; evidence: { measurement_id: string; metric_type: string; value: number; bound: number }[]; missing_metrics: string[]; insufficient_baselines: string[] };
 };
 
@@ -79,6 +81,12 @@ export default function MissionReplay({ metrics, revision, request }: { metrics:
       <div className="replay-snapshot" aria-busy={loading}>
         {!ready ? <p role="status">{error ? "Replay paused until history reloads." : "Loading selected mission point..."}</p> : <>
           <dl className="graph-summary"><div><dt>Readings available</dt><dd>{snapshot.visible_count}</dd></div><div><dt>Not yet revealed</dt><dd>{snapshot.remaining_count}</dd></div><div><dt>Preview alerts</dt><dd>{snapshot.preview_alert_count}</dd></div><div><dt>Finding priority</dt><dd className={snapshot.finding.severity}>{snapshot.finding.severity}</dd></div></dl>
+          {!!snapshot.readings_at_time?.length && <section>
+            <h3>Measurement context at selected time</h3>
+            <ul>{snapshot.readings_at_time.map((row) => <li key={row.measurement_id}>
+              {metrics[row.metric_type]?.label} · {readingContext(row)}
+            </li>)}</ul>
+          </section>}
           <div className="replay-chart-header"><h3>{config?.label} <span>({unit})</span></h3></div>
           <div className="health-graph" aria-label="Replay metric graph">
             {!snapshot.trend.length ? <p>No readings for this metric at or before the selected time.</p> : <ResponsiveContainer width="100%" height="100%"><LineChart data={snapshot.trend} margin={{ top: 15, right: 30, left: 0, bottom: 20 }}>

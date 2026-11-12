@@ -34,6 +34,7 @@ import {
 } from "recharts";
 import "./styles.css";
 import MissionReplay from "./MissionReplay";
+import { activities, environments, readingContext, type Activity as ReadingActivity, type Environment } from "./readingContext";
 
 type Measurement = {
   measurement_id: string;
@@ -45,6 +46,8 @@ type Measurement = {
   quality_status: string;
   quality_flags: string[];
   notes?: string;
+  activity?: ReadingActivity;
+  environment?: Environment;
   freshness?: "current" | "stale" | "future";
 };
 
@@ -56,6 +59,12 @@ type Alert = {
   status: string;
   explanation: string;
   evidence_summary: any[];
+};
+
+type Routine = {
+  day: string;
+  environment: Environment;
+  tasks: { metric: string; time: string; status: "Upcoming" | "Overdue" | "Completed" }[];
 };
 
 type FollowUpRecord = {
@@ -152,7 +161,6 @@ function App() {
   const [crew, setCrew] = useState<CrewMember[]>([]);
   const [selected, setSelected] = useState("");
   const [error, setError] = useState("");
-  const [practice, setPractice] = useState<{ id: string; member: CrewMember }>();
 
   const loadCrew = () => {
     setError("");
@@ -165,20 +173,11 @@ function App() {
 
   useEffect(loadCrew, []);
 
-  const member = practice?.member ?? crew.find((profile) => profile.crew_id === selected);
+  const member = crew.find((profile) => profile.crew_id === selected);
   if (!member) return <main className="boot">{error ? <div role="alert"><p>{error}</p><button onClick={loadCrew}>Retry</button></div> : "Loading crew profiles…"}</main>;
 
-  return <CrewWorkspace key={practice?.id ?? selected} member={member} crew={practice ? [member] : crew} active={active} setActive={setActive}
-    practiceId={practice?.id} startPractice={async () => {
-      setPractice(await request("/api/practice", post()));
-      setActive("investigator");
-      window.scrollTo(0, 0);
-    }} exitPractice={() => {
-      if (practice) void request(`/api/practice?practice=${encodeURIComponent(practice.id)}`, { method: "DELETE" }).catch(() => {});
-      setPractice(undefined);
-      setActive("investigator");
-      window.scrollTo(0, 0);
-    }} selectCrew={setSelected} addCrew={(profile) => {
+  return <CrewWorkspace key={selected} member={member} crew={crew} active={active} setActive={setActive}
+    selectCrew={setSelected} addCrew={(profile) => {
     setCrew((current) => [...current, profile]);
     setSelected(profile.crew_id);
   }} removeCrew={(profiles) => {
@@ -187,7 +186,7 @@ function App() {
   }} />;
 }
 
-function CrewWorkspace({ member, crew, active, setActive, selectCrew, addCrew, removeCrew, practiceId, startPractice, exitPractice }: {
+function CrewWorkspace({ member, crew, active, setActive, selectCrew, addCrew, removeCrew }: {
   member: CrewMember;
   crew: CrewMember[];
   active: string;
@@ -195,15 +194,11 @@ function CrewWorkspace({ member, crew, active, setActive, selectCrew, addCrew, r
   selectCrew: (id: string) => void;
   addCrew: (profile: CrewMember) => void;
   removeCrew: (profiles: CrewMember[]) => void;
-  practiceId?: string;
-  startPractice: () => Promise<void>;
-  exitPractice: () => void;
 }) {
   const scopedPath = useMemo(() => (path: string) => {
     const params = new URLSearchParams({ crew_id: member.crew_id });
-    if (practiceId) params.set("practice", practiceId);
     return `${path}${path.includes("?") ? "&" : "?"}${params}`;
-  }, [member.crew_id, practiceId]);
+  }, [member.crew_id]);
   const api = useMemo(() => (path: string, options?: RequestInit) => request(scopedPath(path), options), [scopedPath]);
   const [data, setData] = useState<any>(null);
   const [timelineMetric, setTimelineMetric] = useState<string>();
@@ -222,6 +217,12 @@ function CrewWorkspace({ member, crew, active, setActive, selectCrew, addCrew, r
   const [measurementNotes, setMeasurementNotes] = useState("");
   const [measurementTime, setMeasurementTime] = useState("");
   const [measurementTask, setMeasurementTask] = useState<FollowUpRecord>();
+  const [routineDay, setRoutineDay] = useState<string>();
+  const [routine, setRoutine] = useState<Routine>();
+  const [routineError, setRoutineError] = useState("");
+  const [activity, setActivity] = useState<ReadingActivity>("routine");
+  const [checkinActivity, setCheckinActivity] = useState<ReadingActivity>("routine");
+  const measurementInput = useRef<HTMLInputElement>(null);
   const [responseTarget, setResponseTarget] = useState<string>();
   const [planningAlert, setPlanningAlert] = useState<string>();
   const [recordedTimes, setRecordedTimes] = useState<string[]>([]);
@@ -296,7 +297,29 @@ function CrewWorkspace({ member, crew, active, setActive, selectCrew, addCrew, r
     alert.investigation_id === latestFinding.investigation_id);
   const latestByMetric = data?.summary.latest_readings || {};
   const pageTitle = nav.find(([id]) => id === active)?.[1] || "Mission Overview";
-  const navigate = (view: string) => { setActive(view); window.scrollTo({ top: 0, behavior: "auto" }); };
+  const navigate = (view: string) => {
+    if (view !== "checkin") setRoutineDay(undefined);
+    setActive(view);
+    window.scrollTo({ top: 0, behavior: "auto" });
+  };
+  useEffect(() => {
+    if (active !== "overview" && active !== "checkin") return;
+    let current = true;
+    const refresh = async () => {
+      try {
+        const next = await api("/api/routine");
+        if (current) { setRoutine(next); setRoutineError(""); }
+      } catch (error) {
+        if (current) setRoutineError(error.message || "Could not load the mission routine.");
+      }
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 30_000);
+    return () => { current = false; window.clearInterval(timer); };
+  }, [active, api, data]);
+  useEffect(() => {
+    if (active === "checkin" && routineDay) measurementInput.current?.focus();
+  }, [active, routineDay]);
   const openResponse = (id: string) => {
     setResponseTarget(id);
     navigate("alerts");
@@ -317,16 +340,18 @@ function CrewWorkspace({ member, crew, active, setActive, selectCrew, addCrew, r
     navigate("timeline");
   };
   const openMetric = (metric: string) => openTimeline(metric);
-  const openMeasurement = (metric: string, task?: FollowUpRecord) => {
+  const openMeasurement = (metric: string, task?: FollowUpRecord, day?: string) => {
     setMetric(metric);
     setMeasurementTask(task);
+    setRoutineDay(day);
+    setActivity("routine");
     setManualValue("");
     setMeasurementTime("");
     setMeasurementNotes("");
     navigate("checkin");
   };
 
-  if (!data) return <main className="boot">{message ? <div role="alert"><h1>Unable to load ORBIT</h1><p>{message}</p>{practiceId ? <button onClick={exitPractice}>Exit practice</button> : <button onClick={() => { setMessage(""); load().catch((err) => setMessage(err.message)); }}><RefreshCw size={16} /> Retry</button>}</div> : <><RefreshCw className="spin" /> Loading ORBIT...</>}</main>;
+  if (!data) return <main className="boot">{message ? <div role="alert"><h1>Unable to load ORBIT</h1><p>{message}</p><button onClick={() => { setMessage(""); load().catch((err) => setMessage(err.message)); }}><RefreshCw size={16} /> Retry</button></div> : <><RefreshCw className="spin" /> Loading ORBIT...</>}</main>;
 
   return (
     <div className="shell">
@@ -339,18 +364,15 @@ function CrewWorkspace({ member, crew, active, setActive, selectCrew, addCrew, r
         <header className="page-header">
           <div><p className="eyebrow">{data.summary.mission.mission_name}</p><h1>{pageTitle}</h1></div>
           <div className="header-actions">
-            {practiceId ? <button className="crew-action" disabled={busy} onClick={exitPractice}>Exit practice</button> : <>
             <label className="crew-select">Crew member<select value={member.crew_id} disabled={busy || savingCrew} onChange={(event) => selectCrew(event.target.value)}>
               {crew.map((profile) => <option key={profile.crew_id} value={profile.crew_id}>{profile.name}</option>)}
             </select></label>
             <button className="crew-action" aria-expanded={addingCrew} onClick={() => { setCrewError(""); setAddingCrew(!addingCrew); }} disabled={busy || savingCrew}>Add crew</button>
             <button className="crew-action" onClick={() => { setCrewError(""); setDeletingCrew(true); }} disabled={busy || savingCrew || crew.length < 2}
               title={crew.length < 2 ? "Keep at least one active crew profile" : `Delete ${member.name}`}>Delete crew</button>
-            </>}
             <button aria-label="Refresh data" title="Refresh data" onClick={() => action(async () => {}, "Refreshed")} disabled={busy || savingCrew}><RefreshCw size={16} className={busy ? "spin" : ""} /></button>
           </div>
         </header>
-        {practiceId && <p className="practice-banner"><strong>Practice session</strong> · Use simulated readings only. The session ends when you exit, reload, or after one hour.</p>}
         {addingCrew && <section className="panel crew-editor" aria-label="New crew profile">
           <h2>New crew profile</h2>
           <form onSubmit={async (event) => {
@@ -410,7 +432,19 @@ function CrewWorkspace({ member, crew, active, setActive, selectCrew, addCrew, r
             <MetricCard label="Pending follow-ups" value={data.summary.counts.open_followups} hint="View in Action Centre" icon={<ClipboardCheck />}
               onClick={() => openResponse(taskQueue.length === 1 ? `follow-up-${taskQueue[0].action_id}` : "open-follow-ups")} />
           </div>
-          <MissionHero summary={data.summary} activeAlerts={activeAlerts} latest={latestByMetric} onNavigate={navigate} onOpenMetric={openMetric} />
+          <MissionHero summary={data.summary} activeAlerts={activeAlerts} latest={latestByMetric} onNavigate={navigate} onOpenMetric={openMetric} onMeasure={openMeasurement} metrics={metrics} />
+          <Panel title="Mission Routine">
+            {routineError && <p role="alert" className="reading-warning">{routineError}</p>}
+            {routine && <MissionRoutine routine={routine} metrics={metrics} busy={busy}
+              onRecord={(metric) => openMeasurement(metric, undefined, routine.day)}
+              onEnvironment={(environment) => action(async () => {
+                setRoutine(await api("/api/routine", { ...post({ environment }), method: "PATCH" }));
+              }, "Mission environment saved")}
+              onSchedule={(times) => action(async () => {
+                setRoutine(await api("/api/routine", { ...post({ times }), method: "PATCH" }));
+              }, "Routine schedule saved")} />}
+            {!routine && !routineError && <p role="status">Loading routine…</p>}
+          </Panel>
           <LatestReadings latest={latestByMetric} metrics={metrics} />
           <div className="grid two">
             <Panel title="Workspace status"><OfflineCard latest={data.summary.latest_measurement_at} /></Panel>
@@ -450,8 +484,7 @@ function CrewWorkspace({ member, crew, active, setActive, selectCrew, addCrew, r
             </form>
             <div className="toolbar"><button disabled={busy} onClick={() => action(async () => {
               setInvestigationPreview({ finding: await api("/api/investigations/demo"), demo: true });
-            }, "Drift demo loaded")}>Try gradual drift demo</button>
-            {!practiceId && <button disabled={busy} onClick={() => action(startPractice, "Practice started")}>Start practice session</button>}</div>
+            }, "Drift demo loaded")}>Try gradual drift demo</button></div>
             <p className="muted">The demo compares simulated gradual drift against a stable baseline. Previews do not save readings or create live alerts.</p>
           </Panel>
           {investigationPreview && <Panel title={investigationPreview.demo ? "Gradual drift demo" : "Earlier window preview"}>
@@ -479,10 +512,11 @@ function CrewWorkspace({ member, crew, active, setActive, selectCrew, addCrew, r
               {["mood", "fatigue", "stress", "sleep_quality", "symptom_severity"].map((name) => <label key={name}>{labelFor(name, metrics)}<input type="number" value={(checkin as any)[name]} onChange={(e) => setCheckin({ ...checkin, [name]: e.target.value })} /></label>)}
             </div>
             <label>Mission context or symptoms<textarea value={checkin.notes} onChange={(e) => setCheckin({ ...checkin, notes: e.target.value })} placeholder="Schedule shift, interrupted sleep, recent exercise, or symptoms" /></label>
+            <ActivitySelect value={checkinActivity} onChange={setCheckinActivity} environment={routine?.environment} />
             <p className="muted">Schedule changes, sleep loss, and isolation can affect daily wellbeing. <a href="https://www.nasa.gov/hrp/risks/" target="_blank" rel="noreferrer">NASA Human Research Program</a></p>
-            <button className="primary" onClick={() => action(async () => {
+            <button className="primary" disabled={busy} onClick={() => action(async () => {
               for (const name of ["mood", "fatigue", "stress", "sleep_quality", "symptom_severity"]) {
-                await api("/api/measurements", post({ metric_type: name, value: (checkin as any)[name], unit: metrics[name].unit, measured_at: new Date().toISOString(), source: practiceId ? "simulated_sensor" : "manual", notes: checkin.notes }));
+                await api("/api/measurements", post({ metric_type: name, value: (checkin as any)[name], unit: metrics[name].unit, measured_at: new Date().toISOString(), source: "manual", notes: checkin.notes, activity: checkinActivity }));
               }
             }, "Daily check-in saved")}><ListChecks size={16} /> Submit Check-in</button>
           </Panel>
@@ -493,7 +527,8 @@ function CrewWorkspace({ member, crew, active, setActive, selectCrew, addCrew, r
                 await api("/api/measurements", post({
                   metric_type: metric, value: manualValue, unit: metrics[metric].unit,
                   measured_at: measurementTime ? new Date(measurementTime).toISOString() : new Date().toISOString(),
-                  source: practiceId ? "simulated_sensor" : "manual", notes: measurementNotes.trim(), follow_up_id: measurementTask?.action_id
+                  source: "manual", notes: measurementNotes.trim(),
+                  follow_up_id: measurementTask?.action_id, routine_day: routineDay, activity
                 }));
                 setManualValue("");
                 setMeasurementNotes("");
@@ -502,17 +537,22 @@ function CrewWorkspace({ member, crew, active, setActive, selectCrew, addCrew, r
                   setMeasurementTask(undefined);
                   openResponse(`follow-up-${measurementTask.action_id}`);
                 }
-              }, "Manual measurement saved");
+                if (routineDay) {
+                  navigate("overview");
+                }
+              }, routineDay ? "Routine task completed" : "Manual measurement saved");
             }}>
               {measurementTask && <p>Repeat measurement for <strong>{measurementTask.description}</strong></p>}
-              <label>Metric<select disabled={!!measurementTask} value={metric} onChange={(e) => { setMetric(e.target.value); setManualValue(""); }}>{Object.keys(metrics).map((m) => <option key={m} value={m}>{metrics[m].label}</option>)}</select></label>
-              <p className="muted" id="measurement-guide">{measurementGuidance[metric] || "Use a consistent scoring method and note what influenced this rating."} ORBIT accepts {metrics[metric].min}–{metrics[metric].max} {displayUnit(metrics[metric].unit)} as its input range.</p>
-              {missionContext[metric] && <p className="muted">{missionContext[metric]} <a href="https://www.nasa.gov/hrp/risks/" target="_blank" rel="noreferrer">NASA Human Research Program</a></p>}
-              <label>Value ({displayUnit(metrics[metric].unit)})<input type="number" step="any" min={metrics[metric].min} max={metrics[metric].max} required aria-describedby="measurement-guide" value={manualValue} onChange={(e) => setManualValue(e.target.value)} /></label>
+              {routineDay && <p>Mission Routine · {routineDay} UTC</p>}
+              <label>Metric<select disabled={!!measurementTask || !!routineDay} value={metric} onChange={(e) => { setMetric(e.target.value); setManualValue(""); }}>{Object.keys(metrics).map((m) => <option key={m} value={m}>{metrics[m].label}</option>)}</select></label>
+              <MeasurementGuide metric={metric} config={metrics[metric]} id="measurement-guide" />
+              <label>Value ({displayUnit(metrics[metric].unit)})<input ref={measurementInput} type="number" step="any" min={metrics[metric].min} max={metrics[metric].max} required aria-describedby="measurement-guide" value={manualValue} onChange={(e) => setManualValue(e.target.value)} /></label>
               <label>Measurement time (optional)<input type="datetime-local" value={measurementTime} onChange={(e) => setMeasurementTime(e.target.value)} /></label>
               <small className="muted">Leave the time blank to use the current time.</small>
+              <ActivitySelect value={activity} onChange={setActivity} environment={routine?.environment} />
               <label>Context or device notes (optional)<textarea value={measurementNotes} onChange={(e) => setMeasurementNotes(e.target.value)} /></label>
               <button disabled={busy}>Add Measurement</button>
+              {routineDay && <button type="button" onClick={() => navigate("overview")}>Return to Mission Overview</button>}
               {measurementTask && <button type="button" onClick={() => { setMeasurementTask(undefined); openResponse(`follow-up-${measurementTask.action_id}`); }}>Return to Action Centre</button>}
             </form>
           </Panel>
@@ -526,12 +566,12 @@ function CrewWorkspace({ member, crew, active, setActive, selectCrew, addCrew, r
             <MetricCard label="Overdue follow-ups" value={overdueCount} hint="Open tasks past their due time" icon={<ListChecks />} tone={overdueCount ? "LOW" : undefined} />
           </div>
           <div className="grid two">
-            <Panel title="Open Alerts">{alertQueue.length ? alertQueue.map((a) => <AlertCard key={a.alert_id} alert={a} action={action} api={api} metrics={metrics} busy={busy} onOpenMetric={openMetric} crewName={member.name} practice={!!practiceId} startPlanning={planningAlert === a.alert_id} />) : <><p className="muted">No open alerts for {member.name}.</p><button onClick={() => navigate("investigator")}>Open Drift Investigation</button></>}</Panel>
+            <Panel title="Open Alerts">{alertQueue.length ? alertQueue.map((a) => <AlertCard key={a.alert_id} alert={a} action={action} api={api} metrics={metrics} busy={busy} onOpenMetric={openMetric} crewName={member.name} startPlanning={planningAlert === a.alert_id} />) : <><p className="muted">No open alerts for {member.name}.</p><button onClick={() => navigate("investigator")}>Open Drift Investigation</button></>}</Panel>
             <Panel title="Open Follow-ups" headingId="open-follow-ups">{taskQueue.length ? taskQueue.map((f) => <FollowUp key={f.action_id} follow={f} alert={alerts.find((a) => a.alert_id === f.alert_id)} action={action} api={api} metrics={metrics} busy={busy} onMeasure={openMeasurement} />) : <p className="muted">Plan a follow-up from an open alert to assign a review or repeat reading.</p>}</Panel>
           </div>
           {(alerts.length > alertQueue.length || followUps.length > taskQueue.length) && <details className="panel">
             <summary>Closed alerts and follow-ups ({alerts.length - alertQueue.length + followUps.length - taskQueue.length})</summary>
-            {alerts.filter((a) => !activeAlerts.includes(a)).map((a) => <AlertCard key={a.alert_id} alert={a} action={action} api={api} metrics={metrics} busy={busy} onOpenMetric={openMetric} crewName={member.name} practice={!!practiceId} />)}
+            {alerts.filter((a) => !activeAlerts.includes(a)).map((a) => <AlertCard key={a.alert_id} alert={a} action={action} api={api} metrics={metrics} busy={busy} onOpenMetric={openMetric} crewName={member.name} />)}
             {followUps.filter((f) => !isOpenFollowUp(f)).map((f) => <FollowUp key={f.action_id} follow={f} alert={alerts.find((a) => a.alert_id === f.alert_id)} action={action} api={api} metrics={metrics} busy={busy} onMeasure={openMeasurement} />)}
           </details>}
         </section>}
@@ -604,7 +644,7 @@ function MetricCard({ label, value, hint, icon, tone, onClick }: {
   return onClick ? <button type="button" className={className} onClick={onClick}>{content}</button> : <div className={className}>{content}</div>;
 }
 
-function MissionHero({ summary, activeAlerts, latest, onNavigate, onOpenMetric }: any) {
+function MissionHero({ summary, activeAlerts, latest, onNavigate, onOpenMetric, onMeasure, metrics }: any) {
   const status = activeAlerts.length ? `${activeAlerts[0].severity} priority review` : "No open alerts";
   return <div className="mission-hero">
     <div className="hero-copy">
@@ -618,7 +658,7 @@ function MissionHero({ summary, activeAlerts, latest, onNavigate, onOpenMetric }
       <div className="toolbar overview-actions"><button onClick={() => onNavigate("timeline")}><Activity size={16} /> Health timeline</button><button onClick={() => onNavigate("replay")}><Rewind size={16} /> Open replay</button></div>
       <p className="body-map-hint">Hover over a dot for the latest reading, or select it to explore its history.</p>
     </div>
-    <BodyModel latest={latest} alerts={activeAlerts} onOpenMetric={onOpenMetric} />
+    <BodyModel latest={latest} alerts={activeAlerts} onOpenMetric={onOpenMetric} onMeasure={onMeasure} metrics={metrics} />
   </div>;
 }
 
@@ -629,7 +669,10 @@ const bodyHotspots = [
   { id: "oxygen", label: "Blood oxygen", side: "right", location: "Fingertip sensor reference", unit: "%", metrics: [{ key: "blood_oxygen", label: "Blood oxygen" }] }
 ] as const;
 
-function BodyModel({ latest, alerts, onOpenMetric }: { latest: Record<string, Measurement | undefined>; alerts: Alert[]; onOpenMetric: (metric: string) => void }) {
+function BodyModel({ latest, alerts, onOpenMetric, onMeasure, metrics }: {
+  latest: Record<string, Measurement | undefined>; alerts: Alert[]; onOpenMetric: (metric: string) => void;
+  onMeasure: (metric: string) => void; metrics: Record<string, MeasurementConfig>;
+}) {
   const [selected, setSelected] = useState<typeof bodyHotspots[number]>();
   const detail = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -653,17 +696,13 @@ function BodyModel({ latest, alerts, onOpenMetric }: { latest: Record<string, Me
           aria-label={`${spot.label}${review ? ", review available" : readings.every((row) => !row) ? ", no reading" : ""}`}
           aria-describedby={selected ? undefined : `tip-${spot.id}`}
           onClick={(event) => {
-            if (spot.metrics.length === 1 && (event.nativeEvent as PointerEvent).pointerType !== "touch") {
-              onOpenMetric(spot.metrics[0].key);
-            } else {
-              trigger.current = event.currentTarget;
-              setSelected(spot);
-            }
+            trigger.current = event.currentTarget;
+            setSelected(spot);
           }}>
           {!selected && <span id={`tip-${spot.id}`} role="tooltip" className="hotspot-tooltip">
             <small>{spot.label}</small>
             <HotspotReadings spot={spot} latest={latest} alertMetrics={alertMetrics} />
-            <small>{spot.metrics.length > 1 ? "Select to choose a chart" : "Select to view chart"}</small>
+            <small>Select for charts and measurement guidance</small>
           </span>}
         </button>;
       })}
@@ -675,6 +714,11 @@ function BodyModel({ latest, alerts, onOpenMetric }: { latest: Record<string, Me
         {selected.metrics.map(({ key, label }) => <button key={key} onClick={() => onOpenMetric(key)}>{label} chart</button>)}
         <button onClick={close}>Close</button>
       </div>
+      {selected.metrics.map(({ key, label }) => <details key={key}>
+        <summary>How to record {label.toLowerCase()}</summary>
+        <MeasurementGuide metric={key} config={metrics[key]} />
+        <button onClick={() => onMeasure(key)}>Record {label.toLowerCase()}</button>
+      </details>)}
     </div>}
   </div>;
 }
@@ -721,6 +765,64 @@ function LatestReadings({ latest, metrics }: any) {
       </article>;
     })}</div>
   </section>;
+}
+
+type MeasurementConfig = { label: string; min: number; max: number; unit: string };
+
+function MeasurementGuide({ metric, config, id }: { metric: string; config: MeasurementConfig; id?: string }) {
+  return <div className="measurement-guide" id={id}>
+    <strong>{config.label} measurement guide</strong>
+    <p className="muted">{measurementGuidance[metric] || "Use a consistent scoring method and note what influenced this rating."} ORBIT accepts {config.min}–{config.max} {displayUnit(config.unit)}.</p>
+    {missionContext[metric] && <p className="muted">{missionContext[metric]} <a href="https://www.nasa.gov/hrp/risks/" target="_blank" rel="noreferrer">NASA Human Research Program</a></p>}
+  </div>;
+}
+
+function ActivitySelect({ value, onChange, environment }: {
+  value: ReadingActivity; onChange: (value: ReadingActivity) => void; environment?: Environment;
+}) {
+  return <label>Activity at measurement time {environment && <small>· {environments[environment]}</small>}
+    <select value={value} onChange={(event) => onChange(event.target.value as ReadingActivity)}>
+      {Object.entries(activities).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+    </select>
+  </label>;
+}
+
+function MissionRoutine({ routine, metrics, busy, onRecord, onSchedule, onEnvironment }: {
+  routine: Routine;
+  metrics: Record<string, { label: string }>;
+  busy: boolean;
+  onRecord: (metric: string) => void;
+  onEnvironment: (environment: Environment) => void;
+  onSchedule: (times: Record<string, FormDataEntryValue>) => void;
+}) {
+  const completed = routine.tasks.filter((task) => task.status === "Completed").length;
+  return <>
+    <label>Mission environment<select value={routine.environment} disabled={busy}
+      onChange={(event) => onEnvironment(event.target.value as Environment)}>
+      {Object.entries(environments).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+    </select></label>
+    <p role="status">{completed} of {routine.tasks.length} check-ins completed · {routine.day} UTC</p>
+    <ul className="routine-list">
+      {routine.tasks.map((task) => <li key={task.metric}>
+        <strong>{metrics[task.metric].label}</strong>
+        <span className={task.status === "Overdue" ? "reading-warning" : "muted"}>{task.time} UTC · {task.status}</span>
+        {task.status !== "Completed" && <button onClick={() => onRecord(task.metric)} aria-label={`Record ${metrics[task.metric].label}`}>Record</button>}
+      </li>)}
+    </ul>
+    <details>
+      <summary>Edit this crew member’s daily schedule</summary>
+      <form className="guidance-form" key={JSON.stringify([routine.environment, routine.tasks.map(({ metric, time }) => [metric, time])])}
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSchedule(Object.fromEntries(new FormData(event.currentTarget)));
+        }}>
+        {routine.tasks.map((task) => <label key={task.metric}>{metrics[task.metric].label} (UTC)
+          <input type="time" name={task.metric} defaultValue={task.time} required />
+        </label>)}
+        <button disabled={busy}>Save schedule</button>
+      </form>
+    </details>
+  </>;
 }
 
 function Panel({ title, children, headingId }: any) {
@@ -853,7 +955,7 @@ function HealthTimeline({ metrics, revision, api, initialMetric, initialQuality 
 function ReadingTooltip({ active, payload, label, unit }: any) {
   if (!active || !payload?.length) return null;
   const row = payload[0].payload;
-  return <div className="reading-chart-tooltip"><strong>{label}: {row.value} {unit}</strong><p>{new Date(row.measured_at).toLocaleString()}</p><p>{row.source.replaceAll("_", " ")} · {row.quality_status}</p>{!!row.quality_flags?.length && <p className="reading-warning">{row.quality_flags.join(", ")}</p>}</div>;
+  return <div className="reading-chart-tooltip"><strong>{label}: {row.value} {unit}</strong><p>{new Date(row.measured_at).toLocaleString()}</p><p>{row.source.replaceAll("_", " ")} · {row.quality_status}</p>{row.activity && <p>{readingContext(row)}</p>}{!!row.quality_flags?.length && <p className="reading-warning">{row.quality_flags.join(", ")}</p>}</div>;
 }
 
 function displayUnit(unit: string) {
@@ -949,9 +1051,9 @@ function InvestigationResult({ finding, alert, metrics, onOpenMetric, onMeasure,
   </div>;
 }
 
-function AlertCard({ alert, action, api, metrics, busy, onOpenMetric, crewName, practice, startPlanning = false }: {
+function AlertCard({ alert, action, api, metrics, busy, onOpenMetric, crewName, startPlanning = false }: {
   alert: Alert; action: any; api: typeof request; metrics: any; busy: boolean; onOpenMetric: (metric: string) => void;
-  crewName: string; practice: boolean; startPlanning?: boolean;
+  crewName: string; startPlanning?: boolean;
 }) {
   const [planning, setPlanning] = useState(startPlanning);
   const evidenceMetrics = [...new Set<string>((alert.evidence_summary || []).map((item) => item.metric_type))]
@@ -962,7 +1064,7 @@ function AlertCard({ alert, action, api, metrics, busy, onOpenMetric, crewName, 
     <h3 className={alert.severity}>{alert.title}</h3>
     <p>{alert.explanation}</p>
     <p><span className="pill">{alert.severity}</span><span className="pill">{alert.status}</span></p>
-    <GroundReview alert={alert} api={api} metrics={metrics} crewName={crewName} practice={practice} />
+    <GroundReview alert={alert} api={api} metrics={metrics} crewName={crewName} />
     {evidenceMetrics.length > 0 && <div className="toolbar">{evidenceMetrics.map((metric) =>
       <button key={metric} onClick={() => onOpenMetric(metric)}>View {metrics[metric].label}</button>
     )}</div>}
@@ -1007,8 +1109,8 @@ function AlertCard({ alert, action, api, metrics, busy, onOpenMetric, crewName, 
   </div>;
 }
 
-function GroundReview({ alert, api, metrics, crewName, practice }: {
-  alert: Alert; api: typeof request; metrics: any; crewName: string; practice: boolean;
+function GroundReview({ alert, api, metrics, crewName }: {
+  alert: Alert; api: typeof request; metrics: any; crewName: string;
 }) {
   const [brief, setBrief] = useState("");
   const [busy, setBusy] = useState(false);
@@ -1022,7 +1124,7 @@ function GroundReview({ alert, api, metrics, crewName, practice }: {
     try {
       const data = await api(`/api/alerts/${alert.alert_id}/brief`);
       setBrief([
-        practice ? "ORBIT practice summary • Simulated data" : "ORBIT ground review summary",
+        "ORBIT ground review summary",
         `Crew member · ${crewName}`,
         `Alert · ${alert.title} (${alert.severity}, ${alert.status})`,
         `Observation window (UTC) · ${data.window_start || "Unavailable"} to ${data.as_of || "Unavailable"}`,
@@ -1107,7 +1209,7 @@ function BaselineTable({ rows, metrics = {} }: any) {
 }
 
 function MeasurementTable({ rows }: { rows: Measurement[] }) {
-  return <Panel title="Measurement Records"><div className="table-wrap"><table><thead><tr><th>Metric</th><th>Value</th><th>Time</th><th>Source</th><th>Quality</th></tr></thead><tbody>{rows.map((m) => <tr key={m.measurement_id}><td className="metric-name">{m.metric_type.replaceAll("_", " ")}</td><td>{m.value} {displayUnit(m.unit)}</td><td>{new Date(m.measured_at).toLocaleString()}</td><td>{m.source.replaceAll("_", " ")}</td><td><span className={`status-label ${m.quality_status}`}>{m.quality_status}</span><small className="record-flags">{m.quality_flags?.map((flag) => flag.replaceAll("_", " ")).join(", ")}</small></td></tr>)}</tbody></table></div></Panel>;
+  return <Panel title="Measurement Records"><div className="table-wrap"><table><thead><tr><th>Metric</th><th>Value</th><th>Time</th><th>Source</th><th>Quality</th><th>Context</th></tr></thead><tbody>{rows.map((m) => <tr key={m.measurement_id}><td className="metric-name">{m.metric_type.replaceAll("_", " ")}</td><td>{m.value} {displayUnit(m.unit)}</td><td>{new Date(m.measured_at).toLocaleString()}</td><td>{m.source.replaceAll("_", " ")}</td><td><span className={`status-label ${m.quality_status}`}>{m.quality_status}</span><small className="record-flags">{m.quality_flags?.map((flag) => flag.replaceAll("_", " ")).join(", ")}</small></td><td>{readingContext(m) || "—"}</td></tr>)}</tbody></table></div></Panel>;
 }
 
 function format(value: number) {

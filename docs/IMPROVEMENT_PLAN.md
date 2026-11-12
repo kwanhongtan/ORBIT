@@ -1,5 +1,12 @@
 # ORBIT Improvement Plan
 
+## Crew workflows
+
+1. **Mission Routine** — Select a crew member, review today's scheduled measurements, open a task, and save a linked reading through Daily Check-in. Track completion and overdue tasks. Use the mission clock and save schedule changes per crew profile.
+2. **Environment context** — Select the mission environment and tag a reading with the activity at measurement time. Show the tag in Health Timeline and Mission Replay. Define demo checklists for each environment and verify older readings still work without a tag.
+3. **Measurement cards** — Open a card from Daily Check-in or a body hotspot. Read how to record the indicator and which context to capture, then open the measurement form with the metric selected. Reuse the existing guidance and source links.
+4. **Crew readiness** — Show daily routine completion for the selected crew member.
+
 Checkpoint before improvements: commit `373b2fb`, tag `before-improvements-2026-10-24`.
 
 ## Mission Replay

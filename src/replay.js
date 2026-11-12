@@ -31,6 +31,7 @@ export function replaySnapshot(state, { at, metric = "heart_rate", crew_id = "cr
     visible_count: visible.length,
     remaining_count: rows.length - visible.length,
     latest_readings: latestReadings(preview, crew_id, time),
+    readings_at_time: visible.filter((row) => Date.parse(row.measured_at) === time.getTime() && row.activity),
     trend: visible.filter((row) => row.metric_type === metric && Number.isFinite(row.value)).map((row) => ({ ...row, timestamp: new Date(row.measured_at).getTime() })),
     baselines: preview.baselines,
     finding,

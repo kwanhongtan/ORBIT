@@ -25,6 +25,7 @@ import {
   localAiExplanation
 } from "./src/core.js";
 import { assistantReply } from "./src/assistant.js";
+import { activities, missionRoutine, validEnvironment, validRoutineTimes } from "./src/routine.js";
 import { replayTimeline, replaySnapshot } from "./src/replay.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -34,15 +35,12 @@ const PORT = Number(process.env.PORT || 4173);
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 let liveState = loadState();
-const practiceSessions = new Map();
 
-function createPractice() {
+function createDriftDemoFinding() {
   const state = initialState();
-  state.crew[0].name = "Practice Crew Member";
   generateScenario(state, { scenario: "stable_baseline", days: 12, seed: 21 });
   generateScenario(state, { scenario: "gradual_drift", days: 10, seed: 22 });
-  runInvestigation(state);
-  return state;
+  return runInvestigation(state);
 }
 
 function loadState() {
@@ -105,7 +103,7 @@ function safe(handler) {
       const url = new URL(req.url, `http://${req.headers.host}`);
       await handler(req, res, url);
       if (req.method !== "GET" && req.method !== "OPTIONS" && req.method !== "DELETE" &&
-          url.pathname !== "/api/crew" && url.pathname !== "/api/practice" && !url.searchParams.has("practice")) saveState();
+          url.pathname !== "/api/crew" && !url.searchParams.has("practice")) saveState();
     } catch (err) {
       if (res.headersSent) res.destroy();
       else send(res, err.status || 500, { error: err.message || "Unexpected error" });
@@ -119,30 +117,8 @@ const server = http.createServer(safe(async (req, res, url) => {
   if (!url.pathname.startsWith("/api/")) {
     return serveStatic(req, res, url.pathname);
   }
-  const practiceId = url.searchParams.get("practice");
-  if (url.pathname === "/api/practice") {
-    if (req.method === "POST") {
-      for (const [id, session] of practiceSessions) {
-        if (session.expires < Date.now()) practiceSessions.delete(id);
-      }
-      if (practiceSessions.size >= 20) return send(res, 409, { error: "Too many practice sessions are open." });
-      const id = randomUUID();
-      const state = createPractice();
-      practiceSessions.set(id, { state, expires: Date.now() + 3600000 });
-      return send(res, 201, { id, member: state.crew[0] });
-    }
-    if (req.method === "DELETE") {
-      practiceSessions.delete(practiceId);
-      return send(res, 200, { ended: true });
-    }
-    return notFound(res);
-  }
-  const practice = practiceSessions.get(practiceId);
-  if (url.searchParams.has("practice") && (!practice || practice.expires < Date.now())) {
-    return send(res, 404, { error: "Practice session expired. Exit practice and start a new session." });
-  }
-  if (practice && req.method !== "GET" && (url.pathname.startsWith("/api/crew") || url.pathname === "/api/mission")) return notFound(res);
-  const state = practice?.state ?? liveState;
+  if (url.pathname === "/api/practice" || url.searchParams.has("practice")) return notFound(res);
+  const state = liveState;
 
   if (req.method === "GET" && url.pathname === "/api/health") return send(res, 200, { ok: true, app: "ORBIT", persistence: DB_PATH });
   if (req.method === "GET" && url.pathname === "/api/config") return send(res, 200, { metrics: METRICS, ai_enabled: process.env.AI_ENABLED === "true", model: process.env.GEMINI_MODEL || "not configured" });
@@ -186,6 +162,17 @@ const server = http.createServer(safe(async (req, res, url) => {
   const ownsAlert = (id) => state.alerts.some((row) => row.alert_id === id && owned(row));
   const ownsFollowUp = (row) => ownsAlert(row.alert_id);
 
+  if (url.pathname === "/api/routine" && req.method === "GET") return send(res, 200, missionRoutine(state, member));
+  if (url.pathname === "/api/routine" && req.method === "PATCH") {
+    const { times, environment } = await body(req);
+    const selected = environment ?? member.environment ?? "station";
+    if (!validEnvironment(selected)) return send(res, 400, { error: "Choose a supported mission environment." });
+    if (times !== undefined && !validRoutineTimes(times)) return send(res, 400, { error: "Enter a valid UTC time for each routine task." });
+    member.environment = selected;
+    if (times) member.routine_schedules = { ...member.routine_schedules, [selected]: times };
+    return send(res, 200, missionRoutine(state, member));
+  }
+
   if (req.method === "GET" && url.pathname === "/api/replay/timeline") return send(res, 200, replayTimeline(state, crewId));
   if (req.method === "GET" && url.pathname === "/api/replay/snapshot") return send(res, 200, replaySnapshot(state, { at: url.searchParams.get("at"), metric: url.searchParams.get("metric") || "heart_rate", crew_id: crewId }));
 
@@ -206,7 +193,23 @@ const server = http.createServer(safe(async (req, res, url) => {
     if (input.follow_up_id && (!followUp || ["COMPLETED", "CANCELLED"].includes(followUp.status) || followUp.metric_type !== input.metric_type)) {
       return send(res, 409, { error: "This measurement does not match an open follow-up for the selected crew member." });
     }
-    const measurement = createMeasurement({ ...input, crew_id: target }, state);
+    const now = new Date();
+    const measurement = createMeasurement({ ...input, crew_id: target }, state, now);
+    if (input.activity !== undefined) {
+      if (!activities.includes(input.activity)) return send(res, 400, { error: "Choose a supported measurement activity." });
+      measurement.activity = input.activity;
+      measurement.environment = state.crew.find((row) => row.crew_id === target).environment ?? "station";
+    }
+    if (input.routine_day !== undefined) {
+      const routine = missionRoutine(state, member, now);
+      const task = routine.tasks.find((row) => row.metric === measurement.metric_type);
+      if (target !== crewId || followUp || input.routine_day !== routine.day || !task || task.status === "Completed" ||
+          !measurement.measured_at.startsWith(routine.day) || new Date(measurement.measured_at) > now ||
+          measurement.quality_status !== "valid") {
+        return send(res, 409, { error: "Routine tasks need one valid reading from today (UTC). Refresh Mission Overview to check the task status." });
+      }
+      measurement.routine_day = routine.day;
+    }
     state.measurements.push(measurement);
     if (followUp) followUp.measurement_id = measurement.measurement_id;
     return send(res, 201, measurement);
@@ -242,7 +245,7 @@ const server = http.createServer(safe(async (req, res, url) => {
 
   if (req.method === "POST" && url.pathname === "/api/investigations/run") return send(res, 201, runInvestigation(state, crewId));
   if (req.method === "GET" && url.pathname === "/api/investigations/demo") {
-    return send(res, 200, { ...createPractice().investigations[0], crew_id: crewId });
+    return send(res, 200, { ...createDriftDemoFinding(), crew_id: crewId });
   }
   if (req.method === "GET" && url.pathname === "/api/investigations") return send(res, 200, state.investigations.filter(owned));
   if (req.method === "GET" && url.pathname.startsWith("/api/investigations/")) return send(res, 200, state.investigations.find((i) => owned(i) && i.investigation_id === url.pathname.split("/").at(-1)) || {});
