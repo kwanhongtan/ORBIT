@@ -36,13 +36,6 @@ const PORT = Number(process.env.PORT || 4173);
 fs.mkdirSync(DATA_DIR, { recursive: true });
 let liveState = loadState();
 
-function createDriftDemoFinding() {
-  const state = initialState();
-  generateScenario(state, { scenario: "stable_baseline", days: 12, seed: 21 });
-  generateScenario(state, { scenario: "gradual_drift", days: 10, seed: 22 });
-  return runInvestigation(state);
-}
-
 function loadState() {
   if (!fs.existsSync(DB_PATH)) return initialState();
   try {
@@ -244,13 +237,19 @@ const server = http.createServer(safe(async (req, res, url) => {
   if (req.method === "POST" && url.pathname === "/api/simulator/reset") return send(res, 200, clearDemoData(state, crewId));
 
   if (req.method === "POST" && url.pathname === "/api/investigations/run") return send(res, 201, runInvestigation(state, crewId));
-  if (req.method === "GET" && url.pathname === "/api/investigations/demo") {
-    return send(res, 200, { ...createDriftDemoFinding(), crew_id: crewId });
-  }
   if (req.method === "GET" && url.pathname === "/api/investigations") return send(res, 200, state.investigations.filter(owned));
   if (req.method === "GET" && url.pathname.startsWith("/api/investigations/")) return send(res, 200, state.investigations.find((i) => owned(i) && i.investigation_id === url.pathname.split("/").at(-1)) || {});
 
-  if (req.method === "GET" && url.pathname === "/api/alerts") return send(res, 200, state.alerts.filter(owned));
+  if (req.method === "GET" && url.pathname === "/api/alerts") {
+    const contextById = new Map(state.measurements.filter((row) => owned(row) && row.activity)
+      .map((row) => [row.measurement_id, { activity: row.activity, environment: row.environment }]));
+    return send(res, 200, state.alerts.filter(owned).map((alert) => ({
+      ...alert,
+      evidence_context: Object.fromEntries((alert.evidence_summary ?? [])
+        .filter((row) => contextById.has(row.measurement_id))
+        .map((row) => [row.measurement_id, contextById.get(row.measurement_id)]))
+    })));
+  }
   const briefRoute = url.pathname.match(/^\/api\/alerts\/([^/]+)\/brief$/);
   if (req.method === "GET" && briefRoute) {
     const alert = state.alerts.find((row) => row.alert_id === briefRoute[1] && owned(row));
