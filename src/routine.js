@@ -1,6 +1,14 @@
+const standardTimes = { sleep_duration: "08:00", heart_rate: "09:00", mood: "18:00" };
+const surfaceTimes = { sleep_duration: "07:00", heart_rate: "08:00", mood: "19:00" };
+
 const presets = {
-  station: { sleep_duration: "08:00", heart_rate: "09:00", mood: "18:00" },
-  lunar_surface: { sleep_duration: "07:00", heart_rate: "08:00", mood: "19:00" }
+  station: standardTimes,
+  spacecraft: standardTimes,
+  lunar_orbit: standardTimes,
+  lunar_surface: surfaceTimes,
+  mars_surface: surfaceTimes,
+  surface_rover: surfaceTimes,
+  earth_analog: standardTimes
 };
 
 export const activities = ["routine", "post_exercise", "pre_eva", "post_eva"];

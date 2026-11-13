@@ -88,6 +88,7 @@ const measurementGuidance: Record<string, string> = {
   diastolic_bp: "Record the lower number from the cuff display. Record the upper number separately using the same measurement time.",
   sleep_duration: "Enter hours slept. Note the sleep period and use the same tracking method for later entries.",
   exercise_duration: "Enter the session duration in minutes. Note the activity and intensity.",
+  hydration: "Record your hydration self-rating on the 1–10 scale. Use the same scoring method each time and note any changes in fluid intake or activity.",
   radiation_dose: "Enter a simulated dose in mSv and identify the simulation source in the notes.",
   bone_assessment: "Enter a prototype score and describe the scoring method in the notes."
 };
@@ -637,7 +638,9 @@ const bodyHotspots = [
   { id: "temperature", label: "Body temperature", side: "left", location: "Body-wide reading. Measurement site is not tracked.", unit: "°C", metrics: [{ key: "body_temperature", label: "Temperature" }] },
   { id: "cardio", label: "Heart rate", side: "left", location: "Cardiovascular signal", unit: "bpm", metrics: [{ key: "heart_rate", label: "Heart rate" }] },
   { id: "pressure", label: "Blood pressure", side: "left", location: "Upper-arm cuff reference", unit: "mmHg", metrics: [{ key: "systolic_bp", label: "Systolic" }, { key: "diastolic_bp", label: "Diastolic" }] },
-  { id: "oxygen", label: "Blood oxygen", side: "right", location: "Fingertip sensor reference", unit: "%", metrics: [{ key: "blood_oxygen", label: "Blood oxygen" }] }
+  { id: "oxygen", label: "Blood oxygen", side: "right", location: "Fingertip sensor reference", unit: "%", metrics: [{ key: "blood_oxygen", label: "Blood oxygen" }] },
+  { id: "hydration", label: "Hydration", side: "right", location: "Whole-body hydration self-rating", unit: "/10", metrics: [{ key: "hydration", label: "Hydration" }] },
+  { id: "exercise", label: "Exercise duration", side: "left", location: "Duration of the full exercise session", unit: "min", metrics: [{ key: "exercise_duration", label: "Exercise duration" }] }
 ] as const;
 
 function BodyModel({ latest, alerts, onOpenMetric, onMeasure, metrics }: {
@@ -745,6 +748,7 @@ function MeasurementGuide({ metric, config, id }: { metric: string; config: Meas
     <strong>{config.label} measurement guide</strong>
     <p className="muted">{measurementGuidance[metric] || "Use a consistent scoring method and note what influenced this rating."} ORBIT accepts {config.min}–{config.max} {displayUnit(config.unit)}.</p>
     {missionContext[metric] && <p className="muted">{missionContext[metric]} <a href="https://www.nasa.gov/hrp/risks/" target="_blank" rel="noreferrer">NASA Human Research Program</a></p>}
+    {metric === "sleep_duration" && <p className="muted">NASA’s ARCHeR study tracked sleep, activity, and wellbeing during Artemis II. <a href="https://www.nasa.gov/hrp/ongoing-hrp-research/" target="_blank" rel="noreferrer">NASA’s ARCHeR study</a></p>}
   </div>;
 }
 

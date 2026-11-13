@@ -1,6 +1,11 @@
 export const environments = {
   station: "Space station",
-  lunar_surface: "Lunar surface"
+  spacecraft: "Spacecraft in transit",
+  lunar_orbit: "Lunar orbit",
+  lunar_surface: "Lunar surface",
+  mars_surface: "Mars surface",
+  surface_rover: "Surface rover",
+  earth_analog: "Earth analog habitat"
 };
 
 export const activities = {
