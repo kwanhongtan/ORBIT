@@ -1,5 +1,11 @@
 # Credits
 
+## Rotatable Crew Wireframe
+
+The man and woman variants use the CC0 adult [MakeHuman shape targets](https://github.com/makehumancommunity/makehuman/tree/master/makehuman/data/targets/macrodetails).
+
+The Mission Overview uses the body geometry and original face edges from the [MakeHuman base mesh](https://github.com/makehumancommunity/makehuman/blob/master/makehuman/data/3dobjs/base.obj), released under [CC0 1.0](https://github.com/makehumancommunity/makehuman/blob/master/LICENSE.ASSETS.md). ORBIT normalizes the mesh and packages it locally as `frontend/public/models/crew-wireframe.bin`.
+
 ## 3D Adult Body Model
 
 - File: `frontend/public/models/professional-lab-researcher.glb`

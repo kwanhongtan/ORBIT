@@ -156,7 +156,7 @@ const post = (body?: unknown): RequestInit => ({
   body: body ? JSON.stringify(body) : undefined
 });
 
-type CrewMember = { crew_id: string; name: string; role: string };
+type CrewMember = { crew_id: string; name: string; role: string; gender?: import("./bodyViewer").CrewGender };
 
 function App() {
   const [active, setActive] = useState("overview");
@@ -375,7 +375,7 @@ function CrewWorkspace({ member, crew, active, setActive, selectCrew, addCrew, r
             setCrewError("");
             setSavingCrew(true);
             try {
-              addCrew(await request("/api/crew", post({ name: fields.get("name"), role: fields.get("role") })));
+              addCrew(await request("/api/crew", post({ name: fields.get("name"), role: fields.get("role"), gender: fields.get("gender") })));
             } catch (err: any) {
               setCrewError(err.message);
             } finally {
@@ -385,6 +385,11 @@ function CrewWorkspace({ member, crew, active, setActive, selectCrew, addCrew, r
             <div className="crew-form">
               <label>Name<input name="name" required maxLength={80} /></label>
               <label>Mission role (optional)<input name="role" maxLength={80} /></label>
+              <label>Gender (body model)<select name="gender" defaultValue="male">
+                <option value="male">Man</option>
+                <option value="female">Woman</option>
+                <option value="unspecified">Unspecified (uses man model)</option>
+              </select></label>
             </div>
             {crewError && !deletingCrew && <p role="alert">{crewError}</p>}
             <div className="toolbar">
@@ -630,7 +635,7 @@ function MissionHero({ summary, activeAlerts, latest, onOpenMetric, onMeasure, m
       </div>
       <p className="body-map-hint">Hover over a dot for the latest reading, or select it to explore its history.</p>
     </div>
-    <BodyModel latest={latest} alerts={activeAlerts} onOpenMetric={onOpenMetric} onMeasure={onMeasure} metrics={metrics} />
+    <BodyModel latest={latest} alerts={activeAlerts} onOpenMetric={onOpenMetric} onMeasure={onMeasure} metrics={metrics} gender={summary.crew.gender ?? "unspecified"} />
   </div>;
 }
 
@@ -643,13 +648,38 @@ const bodyHotspots = [
   { id: "exercise", label: "Exercise duration", side: "left", location: "Duration of the full exercise session", unit: "min", metrics: [{ key: "exercise_duration", label: "Exercise duration" }] }
 ] as const;
 
-function BodyModel({ latest, alerts, onOpenMetric, onMeasure, metrics }: {
+function BodyModel({ latest, alerts, onOpenMetric, onMeasure, metrics, gender }: {
   latest: Record<string, Measurement | undefined>; alerts: Alert[]; onOpenMetric: (metric: string) => void;
   onMeasure: (metric: string) => void; metrics: Record<string, MeasurementConfig>;
+  gender: import("./bodyViewer").CrewGender;
 }) {
   const [selected, setSelected] = useState<typeof bodyHotspots[number]>();
   const detail = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
+  const figure = useRef<HTMLDivElement>(null);
+  const canvas = useRef<HTMLCanvasElement>(null);
+  const drag = useRef<{ id: number; x: number }>(null);
+  const [angle, setAngle] = useState(0);
+  const [viewer, setViewer] = useState<Awaited<ReturnType<typeof import("./bodyViewer").createBodyViewer>>>();
+  useEffect(() => {
+    const controller = new AbortController();
+    const element = canvas.current!;
+    let loaded: typeof viewer;
+    import("./bodyViewer").then(({ createBodyViewer }) => createBodyViewer(element, controller.signal, gender)).then((result) => {
+      if (controller.signal.aborted) result.dispose();
+      else { loaded = result; setViewer(result); }
+    }).catch(() => { /* Keep the static body map when WebGL or the mesh is unavailable. */ });
+    return () => { controller.abort(); loaded?.dispose(); };
+  }, [gender]);
+  useEffect(() => {
+    if (!viewer || !figure.current) return;
+    const element = figure.current;
+    const draw = () => viewer.draw(angle, element.querySelectorAll<HTMLButtonElement>(".body-hotspot"));
+    draw();
+    const observer = new ResizeObserver(draw);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [viewer, angle]);
   const alertMetrics = new Set(alerts.flatMap((alert) => (alert.evidence_summary || []).map((item) => item.metric_type)));
   useEffect(() => {
     if (selected) detail.current?.querySelector("button")?.focus();
@@ -660,8 +690,31 @@ function BodyModel({ latest, alerts, onOpenMetric, onMeasure, metrics }: {
   };
 
   return <div className="body-model reference-body" role="group" aria-label="Crew health map">
-    <div className="body-figure">
-      <img src="/images/wireframe-human-front.png" alt="Cyan wireframe adult body front view" />
+    <svg width="0" height="0" className="body-image-filter" aria-hidden="true">
+      <filter id="body-wireframe" colorInterpolationFilters="sRGB">
+        {/* Keep cyan linework and make the darker blue backdrop transparent. */}
+        <feColorMatrix type="matrix" values="
+          0 0 0 0 .29
+          0 0 0 0 .86
+          0 0 0 0 .95
+          -5.2 8 -2.8 0 -.36" />
+      </filter>
+    </svg>
+    <div ref={figure} className={`body-figure${viewer ? " body-figure-interactive" : ""}`}>
+      {!viewer && <img src="/images/wireframe-human-front.png" alt="Cyan wireframe adult body front view" />}
+      <canvas ref={canvas} className="body-wireframe-canvas" hidden={!viewer} aria-label="Rotatable cyan wireframe of an adult body"
+        onPointerDown={(event) => {
+          if (event.button !== 0) return;
+          drag.current = { id: event.pointerId, x: event.clientX };
+          event.currentTarget.setPointerCapture(event.pointerId);
+        }}
+        onPointerMove={(event) => {
+          if (drag.current?.id !== event.pointerId) return;
+          const delta = event.clientX - drag.current.x;
+          drag.current.x = event.clientX;
+          setAngle((current) => current + delta * 0.012);
+        }}
+        onLostPointerCapture={() => { drag.current = null; }} />
       {bodyHotspots.map((spot) => {
         const readings = spot.metrics.map(({ key }) => latest[key]);
         const review = spot.metrics.some(({ key }) => alertMetrics.has(key)) || readings.some((row) => row && (row.freshness !== "current" || row.quality_status !== "valid" || row.quality_flags?.length));
@@ -681,6 +734,11 @@ function BodyModel({ latest, alerts, onOpenMetric, onMeasure, metrics }: {
         </button>;
       })}
     </div>
+    {viewer && <div className="body-rotation" role="group" aria-label="Body rotation">
+      <button type="button" onClick={() => setAngle(angle - Math.PI / 6)}>Rotate left</button>
+      <button type="button" onClick={() => setAngle(0)}>Front view</button>
+      <button type="button" onClick={() => setAngle(angle + Math.PI / 6)}>Rotate right</button>
+    </div>}
     {selected && <div ref={detail} className="hotspot-detail" role="group" aria-label={selected.label} onKeyDown={(event) => { if (event.key === "Escape") close(); }}>
       <strong>{selected.label}</strong>
       <HotspotReadings spot={selected} latest={latest} alertMetrics={alertMetrics} />

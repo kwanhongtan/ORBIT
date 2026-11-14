@@ -127,7 +127,9 @@ const server = http.createServer(safe(async (req, res, url) => {
     const name = typeof input?.name === "string" ? input.name.trim() : "";
     const role = typeof input?.role === "string" ? input.role.trim() : "";
     if (!name || name.length > 80 || role.length > 80) return send(res, 400, { error: "Enter a crew name and an optional role (up to 80 characters each)." });
-    const member = { crew_id: `crew-${randomUUID()}`, name, role: role || "Crew member", fictional: true };
+    const gender = input?.gender ?? "unspecified";
+    if (!["male", "female", "unspecified"].includes(gender)) return send(res, 400, { error: "Choose a supported gender option." });
+    const member = { crew_id: `crew-${randomUUID()}`, name, role: role || "Crew member", gender, fictional: true };
     const next = { ...state, crew: [...state.crew, member] };
     saveState(next);
     liveState = next;
